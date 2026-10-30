@@ -6,6 +6,13 @@ All notable changes to hop are listed here. The format follows
 
 ## [Unreleased]
 
+### Changed
+
+- The Homebrew cask is now `hop-cli` (`brew install --cask morganseznec/tap/hop-cli`).
+  It still installs the `hop` command. Homebrew's main repository has an unrelated
+  `hop` cask, which `brew upgrade --cask hop` picked instead of this one. Installs of
+  `morganseznec/tap/hop` are migrated on the next `brew upgrade`.
+
 ## [0.1.6] - 2026-10-30
 
 The changes below shipped in 0.1.6. The 0.1.5 tag points to the same commit, but its

@@ -47,7 +47,11 @@ nfpms:
         dst: /usr/share/licenses/hop/LICENSE
 
 homebrew_casks:
-  - name: hop
+  # Not "hop": Homebrew's main repository has an unrelated cask of that name, which
+  # "brew upgrade --cask hop" would pick. The cask still installs the hop command.
+  - name: hop-cli
+    # The command stays hop (the default would be the cask name).
+    binaries: [hop]
     repository:
       owner: morganseznec
       name: homebrew-tap
