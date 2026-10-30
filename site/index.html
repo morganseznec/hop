@@ -2,285 +2,616 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>hop: reach any EC2 instance with one command</title>
-<meta name="description" content="hop finds EC2 instances across every AWS profile on your machine and opens a Session Manager shell by name, ID or IP. No SSH keys, no bastion.">
-<meta property="og:title" content="hop">
-<meta property="og:description" content="Reach any EC2 instance in any of your AWS accounts with one command, through Session Manager.">
+<meta name="description" content="hop finds EC2 instances across every AWS profile on your machine and opens a Session Manager shell by name, ID or IP. No SSH keys, no bastion, no instance IDs.">
+<meta name="theme-color" content="#070b14" media="(prefers-color-scheme: dark)">
+<meta name="theme-color" content="#f7faf9" media="(prefers-color-scheme: light)">
+<meta property="og:title" content="hop: reach any EC2 instance with one command">
+<meta property="og:description" content="Every AWS account, every instance, one command. Session Manager without the ceremony.">
 <meta property="og:url" content="https://morganseznec.github.io/hop/">
+<meta property="og:type" content="website">
 <link rel="icon" href="logo-mark.svg" type="image/svg+xml">
 <style>
+:root {
+  color-scheme: light dark;
+  --bg: #f7faf9;
+  --surface: rgba(255, 255, 255, 0.72);
+  --surface-solid: #ffffff;
+  --text: #0b1220;
+  --muted: #4a5868;
+  --faint: #7b8a99;
+  --line: rgba(11, 18, 32, 0.09);
+  --line-strong: rgba(11, 18, 32, 0.16);
+  --mint: #18a383;
+  --mint-glow: rgba(56, 214, 172, 0.35);
+  --violet-glow: rgba(120, 140, 255, 0.22);
+  --amber: #c98a12;
+  --on-mint: #ffffff;
+  --code-bg: #0b1220;
+  --code-text: #d8e4ec;
+  --shadow: 0 1px 0 rgba(255, 255, 255, 0.6) inset, 0 20px 60px -20px rgba(11, 18, 32, 0.25);
+  --radius: 18px;
+  --font: ui-sans-serif, -apple-system, BlinkMacSystemFont, "Inter", "Segoe UI Variable", "Segoe UI", Roboto, sans-serif;
+  --mono: ui-monospace, "SF Mono", "JetBrains Mono", "Cascadia Code", Menlo, Consolas, monospace;
+}
+@media (prefers-color-scheme: dark) {
   :root {
-    --bg: #ffffff;
-    --bg-soft: #f4f7f8;
-    --text: #0c1220;
-    --muted: #4b5563;
-    --line: #e2e8ec;
-    --accent: #1f8f78;
-    --accent-soft: #e6f8f2;
-    --on-accent: #ffffff;
-    --term-bg: #0c1220;
-    --term-text: #d7e3ea;
-    --term-dim: #8a9bab;
-    --term-ok: #5ae6be;
-    --term-warn: #f2c66d;
-    --radius: 10px;
+    --bg: #070b14;
+    --surface: rgba(18, 26, 43, 0.62);
+    --surface-solid: #0f1727;
+    --text: #e9f0f5;
+    --muted: #9aabbb;
+    --faint: #6c7d8f;
+    --line: rgba(255, 255, 255, 0.07);
+    --line-strong: rgba(255, 255, 255, 0.14);
+    --mint: #5ae6be;
+    --mint-glow: rgba(90, 230, 190, 0.28);
+    --violet-glow: rgba(110, 120, 255, 0.20);
+    --amber: #f5c46b;
+    --on-mint: #06110e;
+    --code-bg: #050912;
+    --shadow: 0 1px 0 rgba(255, 255, 255, 0.05) inset, 0 30px 80px -30px rgba(0, 0, 0, 0.7);
   }
-  @media (prefers-color-scheme: dark) {
-    :root {
-      --bg: #0c1220;
-      --bg-soft: #121a2b;
-      --text: #e8eef3;
-      --muted: #9aa8b6;
-      --line: #22304a;
-      --accent: #5ae6be;
-      --accent-soft: #10302b;
-      --on-accent: #0c1220;
-      --term-bg: #070b14;
-    }
-  }
-  * { box-sizing: border-box; }
-  html { -webkit-text-size-adjust: 100%; }
-  body {
-    margin: 0;
-    background: var(--bg);
-    color: var(--text);
-    font: 16px/1.6 -apple-system, BlinkMacSystemFont, "Segoe UI", Inter, Roboto, sans-serif;
-  }
-  a { color: var(--accent); text-decoration: none; }
-  a:hover { text-decoration: underline; }
-  code, pre { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
-  .wrap { max-width: 1040px; margin: 0 auto; padding: 0 16px; }
+}
 
-  header { border-bottom: 1px solid var(--line); }
-  header .wrap { display: flex; align-items: center; justify-content: space-between; height: 64px; }
-  header img { height: 30px; display: block; }
-  nav a { color: var(--muted); margin-left: 20px; font-size: 15px; }
-  nav a:hover { color: var(--text); text-decoration: none; }
+* { box-sizing: border-box; }
+html { scroll-behavior: smooth; -webkit-text-size-adjust: 100%; }
+body { margin: 0; background: var(--bg); color: var(--text); font: 16px/1.6 var(--font); -webkit-font-smoothing: antialiased; overflow-x: hidden; }
+a { color: inherit; }
+img { display: block; max-width: 100%; }
+code { font-family: var(--mono); }
+::selection { background: var(--mint); color: var(--on-mint); }
+:focus-visible { outline: 2px solid var(--mint); outline-offset: 3px; border-radius: 6px; }
+.wrap { width: min(1120px, 100% - 32px); margin-inline: auto; }
 
-  .hero { padding: 72px 0 40px; text-align: center; }
-  .hero picture img { width: min(340px, 70vw); height: auto; }
-  .hero h1 { font-size: clamp(28px, 4.4vw, 44px); line-height: 1.15; margin: 28px auto 14px; max-width: 780px; letter-spacing: -0.02em; }
-  .hero p.lead { color: var(--muted); font-size: 18px; max-width: 640px; margin: 0 auto 28px; }
-  .cta { display: inline-flex; gap: 12px; flex-wrap: wrap; justify-content: center; }
-  .btn { display: inline-block; padding: 10px 18px; border-radius: 8px; font-weight: 600; font-size: 15px; border: 1px solid var(--line); color: var(--text); }
-  .btn.primary { background: var(--accent); border-color: var(--accent); color: var(--on-accent); }
-  .btn:hover { text-decoration: none; filter: brightness(1.05); }
+/* background: dot grid and two slow glows */
+.sky { position: fixed; inset: 0; z-index: -1; pointer-events: none; overflow: hidden; }
+.sky::before {
+  content: ""; position: absolute; inset: 0;
+  background-image: radial-gradient(var(--line-strong) 1px, transparent 1px); background-size: 28px 28px;
+  mask-image: radial-gradient(ellipse 80% 60% at 50% 0%, #000 30%, transparent 75%);
+  -webkit-mask-image: radial-gradient(ellipse 80% 60% at 50% 0%, #000 30%, transparent 75%);
+  opacity: 0.6;
+}
+.blob { position: absolute; border-radius: 50%; filter: blur(80px); will-change: transform; }
+.blob.a { width: 620px; height: 620px; left: 50%; top: -260px; margin-left: -460px; background: var(--mint-glow); animation: drift-a 22s ease-in-out infinite alternate; }
+.blob.b { width: 520px; height: 520px; left: 50%; top: -180px; margin-left: 20px; background: var(--violet-glow); animation: drift-b 26s ease-in-out infinite alternate; }
+@keyframes drift-a { to { transform: translate(120px, 60px) scale(1.1); } }
+@keyframes drift-b { to { transform: translate(-140px, 90px) scale(0.92); } }
 
-  .install { max-width: 720px; margin: 40px auto 0; text-align: left; }
-  .tabs { display: flex; flex-wrap: wrap; gap: 4px; border-bottom: 1px solid var(--line); }
-  .tabs input { position: absolute; opacity: 0; pointer-events: none; }
-  .tabs label { padding: 8px 14px; cursor: pointer; color: var(--muted); font-size: 14px; border-bottom: 2px solid transparent; margin-bottom: -1px; }
-  .tabs input:checked + label { color: var(--text); border-color: var(--accent); font-weight: 600; }
-  .tabs input:focus-visible + label { outline: 2px solid var(--accent); outline-offset: 2px; }
-  .panel { display: none; width: 100%; order: 99; padding-top: 12px; }
-  #t-brew:checked ~ #p-brew, #t-linux:checked ~ #p-linux, #t-win:checked ~ #p-win,
-  #t-docker:checked ~ #p-docker, #t-go:checked ~ #p-go { display: block; }
-  .panel p { color: var(--muted); font-size: 14px; margin: 10px 2px 0; }
+/* header */
+header.top { position: sticky; top: 0; z-index: 20; backdrop-filter: saturate(160%) blur(16px); -webkit-backdrop-filter: saturate(160%) blur(16px); background: color-mix(in srgb, var(--bg) 70%, transparent); border-bottom: 1px solid var(--line); }
+header.top .wrap { display: flex; align-items: center; gap: 24px; height: 64px; }
+.brand img { height: 28px; width: auto; }
+nav.links { display: flex; gap: 6px; margin-left: auto; align-items: center; }
+nav.links a { text-decoration: none; color: var(--muted); font-size: 14.5px; padding: 6px 10px; border-radius: 8px; transition: color .15s, background .15s; }
+nav.links a:hover { color: var(--text); background: var(--line); }
+nav.links a.gh { display: inline-flex; align-items: center; gap: 8px; font-weight: 600; color: var(--text); padding: 7px 12px; border-radius: 10px; border: 1px solid var(--line-strong); background: var(--surface); }
+.gh svg { width: 16px; height: 16px; }
+nav.links a.gh:hover { border-color: var(--mint); background: var(--surface); }
 
-  pre.code {
-    margin: 0; background: var(--bg-soft); border: 1px solid var(--line); border-radius: var(--radius);
-    padding: 14px 16px; overflow-x: auto; font-size: 14px; line-height: 1.55;
-  }
+/* hero */
+.hero { padding: clamp(56px, 9vw, 112px) 0 24px; text-align: center; }
+.pill { display: inline-flex; align-items: center; gap: 10px; text-decoration: none; font-size: 13.5px; color: var(--muted); padding: 6px 14px 6px 8px; border-radius: 999px; border: 1px solid var(--line-strong); background: var(--surface); backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px); }
+.pill b { font-weight: 600; color: var(--on-mint); background: var(--mint); padding: 2px 8px; border-radius: 999px; font-size: 12px; }
+.pill:hover { color: var(--text); }
+h1 { font-size: clamp(40px, 7.4vw, 84px); line-height: 1.0; letter-spacing: -0.048em; font-weight: 780; margin: 24px auto 20px; max-width: 13ch; }
+.grad { background: linear-gradient(100deg, var(--mint) 10%, #8fb7ff 55%, var(--mint) 95%); background-size: 200% 100%; -webkit-background-clip: text; background-clip: text; color: transparent; animation: shine 8s linear infinite; }
+@keyframes shine { to { background-position: -200% 0; } }
+.lead { font-size: clamp(17px, 2vw, 20px); color: var(--muted); max-width: 640px; margin: 0 auto 32px; }
+.actions { display: flex; flex-wrap: wrap; gap: 12px; justify-content: center; align-items: center; }
+.btn { display: inline-flex; align-items: center; gap: 8px; text-decoration: none; font-weight: 650; font-size: 15px; padding: 12px 20px; border-radius: 12px; border: 1px solid var(--line-strong); background: var(--surface); color: var(--text); transition: transform .15s ease, box-shadow .2s ease, border-color .2s; }
+.btn:hover { transform: translateY(-1px); border-color: var(--mint); }
+.btn.primary { background: var(--mint); border-color: transparent; color: var(--on-mint); box-shadow: 0 10px 30px -10px var(--mint-glow); }
+.btn.primary:hover { box-shadow: 0 14px 40px -10px var(--mint-glow); }
 
-  .term { background: var(--term-bg); border-radius: 12px; overflow: hidden; border: 1px solid #1d2a40; box-shadow: 0 12px 40px rgba(12, 18, 32, 0.18); }
-  .term .bar { display: flex; gap: 7px; padding: 12px 14px; background: #111a2c; }
-  .term .bar span { width: 11px; height: 11px; border-radius: 50%; background: #2a3a55; }
-  .term pre { margin: 0; padding: 16px 18px 20px; color: var(--term-text); font-size: 13px; line-height: 1.6; overflow-x: auto; }
-  .term .p { color: var(--term-ok); }
-  .term .d { color: var(--term-dim); }
-  .term .w { color: var(--term-warn); }
+.cmd { display: inline-flex; align-items: center; gap: 12px; margin-top: 28px; max-width: 100%; font-family: var(--mono); font-size: 14.5px; padding: 10px 10px 10px 18px; border-radius: 14px; background: var(--code-bg); color: var(--code-text); border: 1px solid rgba(255, 255, 255, 0.08); box-shadow: var(--shadow); }
+.cmd .p { color: #5ae6be; user-select: none; }
+.cmd code { white-space: nowrap; overflow-x: auto; scrollbar-width: none; }
+.cmd code::-webkit-scrollbar { display: none; }
+.copy { flex: none; display: inline-grid; place-items: center; width: 34px; height: 34px; border-radius: 9px; border: 1px solid rgba(255, 255, 255, 0.12); background: rgba(255, 255, 255, 0.04); color: #c8d5df; cursor: pointer; transition: background .15s, color .15s; }
+.copy:hover { background: rgba(255, 255, 255, 0.1); color: #fff; }
+.copy svg { width: 16px; height: 16px; }
+.copy.done { color: #5ae6be; }
+.hint { font-size: 13px; color: var(--faint); margin-top: 12px; }
+.hint a { color: var(--mint); }
 
-  section { padding: 56px 0; }
-  section.soft { background: var(--bg-soft); border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); }
-  h2 { font-size: 28px; letter-spacing: -0.01em; margin: 0 0 8px; }
-  .sub { color: var(--muted); margin: 0 0 32px; max-width: 680px; }
-  .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 16px; }
-  .card { background: var(--bg); border: 1px solid var(--line); border-radius: var(--radius); padding: 20px; }
-  section.soft .card { background: var(--bg); }
-  .card h3 { margin: 0 0 6px; font-size: 17px; }
-  .card p { margin: 0; color: var(--muted); font-size: 15px; }
-  .card code { font-size: 13px; background: var(--accent-soft); padding: 1px 5px; border-radius: 4px; color: var(--text); }
+/* terminal */
+.stage { margin: 56px auto 0; max-width: 920px; position: relative; }
+.stage::before { content: ""; position: absolute; inset: 30% 8% -12% 8%; z-index: -1; background: radial-gradient(closest-side, var(--mint-glow), transparent); filter: blur(30px); }
+.term { text-align: left; border-radius: 16px; overflow: hidden; background: linear-gradient(180deg, rgba(20, 28, 46, 0.97), rgba(7, 11, 20, 0.99)); border: 1px solid rgba(255, 255, 255, 0.09); box-shadow: var(--shadow); }
+.term .bar { display: flex; align-items: center; gap: 8px; padding: 13px 16px; border-bottom: 1px solid rgba(255, 255, 255, 0.06); }
+.term .bar i { width: 12px; height: 12px; border-radius: 50%; }
+.term .bar i:nth-child(1) { background: #ff5f57; } .term .bar i:nth-child(2) { background: #febc2e; } .term .bar i:nth-child(3) { background: #28c840; }
+.term .bar span { margin-left: 10px; font: 12.5px var(--mono); color: #7f8fa3; }
+.term pre { margin: 0; padding: 20px 22px 24px; min-height: 236px; font: 13.5px/1.7 var(--mono); color: #d8e4ec; overflow-x: auto; white-space: pre; }
+.t-p { color: #5ae6be; } .t-d { color: #7f8fa3; } .t-ok { color: #5ae6be; } .t-w { color: #f5c46b; } .t-b { color: #e9f0f5; font-weight: 600; }
+.caret { display: inline-block; width: 8px; height: 1.15em; vertical-align: -0.2em; background: #5ae6be; animation: blink 1.05s steps(1) infinite; }
+@keyframes blink { 50% { opacity: 0; } }
 
-  .demo { display: grid; grid-template-columns: 1fr; gap: 20px; }
+/* sections */
+section { padding: clamp(64px, 9vw, 112px) 0; }
+.eyebrow { font: 600 12.5px/1 var(--mono); letter-spacing: .12em; text-transform: uppercase; color: var(--mint); margin: 0 0 14px; }
+h2 { font-size: clamp(30px, 4.4vw, 48px); line-height: 1.08; letter-spacing: -0.035em; margin: 0 0 16px; font-weight: 740; max-width: 20ch; }
+.sub { color: var(--muted); font-size: 18px; max-width: 620px; margin: 0 0 44px; }
+.center { text-align: center; } .center h2, .center .sub { margin-inline: auto; }
 
-  table.usage { width: 100%; border-collapse: collapse; font-size: 15px; }
-  table.usage td { padding: 10px 8px; border-bottom: 1px solid var(--line); vertical-align: top; }
-  table.usage td:first-child { color: var(--muted); width: 38%; }
-  table.usage code { font-size: 13.5px; }
+/* the hop map: one hop from you to any account */
+.map { position: relative; margin-top: 8px; border-radius: 24px; border: 1px solid var(--line); background: radial-gradient(70% 90% at 50% 50%, color-mix(in srgb, var(--mint) 9%, transparent), transparent 70%), var(--surface); box-shadow: var(--shadow); overflow: hidden; }
+.map svg { display: block; width: 100%; height: auto; }
+.map .arc { fill: none; stroke: var(--mint); stroke-width: 1.6; stroke-dasharray: 5 9; opacity: .55; animation: flow 1.6s linear infinite; }
+@keyframes flow { to { stroke-dashoffset: -28; } }
+.map .node rect { fill: var(--surface-solid); stroke: var(--line-strong); }
+.map .node .n { font: 650 15px var(--font); fill: var(--text); }
+.map .node .r { font: 12.5px var(--mono); fill: var(--faint); }
+.map .on { fill: var(--mint); } .map .off { fill: var(--amber); }
+.map .hub { fill: var(--surface-solid); stroke: var(--mint); stroke-width: 1.5; }
+.map .hub-ring { fill: none; stroke: var(--mint); opacity: .35; animation: ring 3s ease-out infinite; transform-origin: 450px 230px; }
+.map .hub-ring.two { animation-delay: 1.5s; }
+@keyframes ring { from { transform: scale(.85); opacity: .45; } to { transform: scale(1.6); opacity: 0; } }
+.map .hub-t { font: 700 22px var(--font); fill: var(--text); letter-spacing: -0.02em; }
+.map .hub-s { font: 12.5px var(--mono); fill: var(--faint); }
+.map .packet { fill: var(--mint); filter: drop-shadow(0 0 6px var(--mint)); }
+.legend { display: flex; flex-wrap: wrap; gap: 18px; justify-content: center; margin-top: 18px; color: var(--muted); font-size: 14px; }
+.legend i { display: inline-block; width: 9px; height: 9px; border-radius: 50%; margin-right: 7px; vertical-align: 1px; }
 
-  footer { padding: 36px 0 48px; color: var(--muted); font-size: 14px; }
-  footer .wrap { display: flex; flex-wrap: wrap; gap: 16px; justify-content: space-between; align-items: center; }
+/* steps */
+.steps { display: grid; grid-template-columns: repeat(3, 1fr); gap: 18px; counter-reset: s; }
+.step { position: relative; padding: 26px; border-radius: var(--radius); background: var(--surface); border: 1px solid var(--line); backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px); }
+.step::before { counter-increment: s; content: "0" counter(s); font: 600 13px var(--mono); color: var(--mint); }
+.step h3 { margin: 10px 0 8px; font-size: 19px; letter-spacing: -0.01em; }
+.step p { margin: 0; color: var(--muted); font-size: 15.5px; }
+.step code, .card code, .panel code, details code { font-size: 13px; padding: 2px 6px; border-radius: 6px; background: var(--line); color: var(--text); }
 
-  @media (max-width: 640px) {
-    nav a { margin-left: 14px; }
-    nav a.hide-sm { display: none; }
-    .hero { padding-top: 48px; }
-    table.usage td:first-child { width: 42%; }
-  }
+/* bento */
+.bento { display: grid; grid-template-columns: repeat(6, 1fr); gap: 18px; }
+.card { position: relative; overflow: hidden; padding: 28px; border-radius: var(--radius); background: var(--surface); border: 1px solid var(--line); box-shadow: var(--shadow); backdrop-filter: blur(14px); -webkit-backdrop-filter: blur(14px); transition: transform .25s ease, border-color .25s ease; }
+.card:hover { transform: translateY(-3px); border-color: var(--line-strong); }
+.card::after { content: ""; position: absolute; inset: auto -30% -60% auto; width: 60%; aspect-ratio: 1; border-radius: 50%; background: radial-gradient(closest-side, var(--mint-glow), transparent); opacity: .5; pointer-events: none; }
+.card h3 { margin: 0 0 8px; font-size: 20px; letter-spacing: -0.015em; }
+.card p { margin: 0; color: var(--muted); font-size: 15.5px; }
+.ico { width: 40px; height: 40px; border-radius: 12px; display: grid; place-items: center; margin-bottom: 18px; background: color-mix(in srgb, var(--mint) 14%, transparent); color: var(--mint); border: 1px solid color-mix(in srgb, var(--mint) 30%, transparent); }
+.ico svg { width: 20px; height: 20px; }
+.c-4 { grid-column: span 4; } .c-2 { grid-column: span 2; } .c-3 { grid-column: span 3; }
+.mini { margin-top: 20px; border-radius: 12px; background: var(--code-bg); color: var(--code-text); font: 12px/1.65 var(--mono); padding: 14px 16px; overflow-x: auto; white-space: pre; border: 1px solid rgba(255, 255, 255, 0.06); }
+.chips { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 18px; }
+.chip { font: 600 12.5px var(--mono); padding: 6px 10px; border-radius: 999px; border: 1px solid var(--line-strong); color: var(--muted); }
+
+/* trust */
+.trust { display: grid; grid-template-columns: 1.1fr 1fr; gap: 28px; align-items: center; }
+.badges { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+.badge { padding: 20px; border-radius: 16px; background: var(--surface); border: 1px solid var(--line); backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px); }
+.badge strong { display: block; font-size: 16px; margin-bottom: 4px; }
+.badge span { color: var(--muted); font-size: 14px; }
+.badge a { color: var(--mint); }
+.verify .term pre { min-height: 0; font-size: 12.5px; }
+
+/* install */
+.install { max-width: 780px; margin-inline: auto; }
+.tabs { display: flex; flex-wrap: wrap; gap: 6px; padding: 6px; border-radius: 14px; background: var(--surface); border: 1px solid var(--line); width: fit-content; max-width: 100%; margin: 0 auto 22px; }
+.tabs button { font: 600 14px var(--font); color: var(--muted); background: transparent; border: 0; cursor: pointer; padding: 8px 14px; border-radius: 10px; transition: background .15s, color .15s; }
+.tabs button[aria-selected="true"] { background: var(--mint); color: var(--on-mint); }
+.panel[hidden] { display: none; }
+.block { position: relative; border-radius: 14px; background: var(--code-bg); border: 1px solid rgba(255, 255, 255, 0.08); box-shadow: var(--shadow); }
+.block pre { margin: 0; padding: 18px 56px 18px 20px; font: 14px/1.7 var(--mono); color: var(--code-text); overflow-x: auto; }
+.block .copy { position: absolute; top: 10px; right: 10px; }
+.panel p { color: var(--muted); font-size: 14.5px; margin: 14px 4px 0; }
+.panel p a { color: var(--mint); }
+
+/* faq */
+.faq { max-width: 780px; margin-inline: auto; }
+details { border-bottom: 1px solid var(--line); padding: 4px 0; }
+summary { list-style: none; cursor: pointer; padding: 18px 40px 18px 0; position: relative; font-weight: 650; font-size: 17px; }
+summary::-webkit-details-marker { display: none; }
+summary::after { content: "+"; position: absolute; right: 6px; top: 14px; font: 400 24px var(--mono); color: var(--mint); transition: transform .2s; }
+details[open] summary::after { transform: rotate(45deg); }
+details p { margin: 0 0 18px; color: var(--muted); }
+details p a { color: var(--mint); }
+
+/* final call and footer */
+.final { text-align: center; padding: clamp(56px, 8vw, 96px) 24px; border-radius: 28px; background: radial-gradient(120% 140% at 50% 0%, color-mix(in srgb, var(--mint) 22%, transparent), transparent 60%), var(--surface); border: 1px solid var(--line-strong); }
+.final h2 { margin-inline: auto; }
+footer { padding: 48px 0 64px; color: var(--faint); font-size: 14px; }
+footer .wrap { display: flex; flex-wrap: wrap; gap: 18px; justify-content: space-between; align-items: center; }
+footer nav { display: flex; flex-wrap: wrap; gap: 18px; }
+footer a { text-decoration: none; color: var(--muted); }
+footer a:hover { color: var(--text); }
+
+/* grid items may shrink below their code blocks, which then scroll inside */
+.steps > *, .bento > *, .trust > *, .badges > * { min-width: 0; }
+
+.reveal { opacity: 0; transform: translateY(18px); transition: opacity .7s ease, transform .7s ease; }
+.reveal.in { opacity: 1; transform: none; }
+
+@media (max-width: 900px) {
+  .steps, .bento, .trust { grid-template-columns: 1fr; }
+  .c-4, .c-2, .c-3 { grid-column: auto; }
+}
+@media (max-width: 640px) {
+  nav.links a.opt { display: none; }
+  .badges { grid-template-columns: 1fr; }
+  .term pre { font-size: 12px; min-height: 230px; padding: 16px; }
+  .cmd { font-size: 13px; }
+}
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation: none !important; transition: none !important; scroll-behavior: auto !important; }
+  .reveal { opacity: 1; transform: none; }
+}
 </style>
 </head>
 <body>
 
-<header>
+<div class="sky" aria-hidden="true"><div class="blob a"></div><div class="blob b"></div></div>
+
+<header class="top">
   <div class="wrap">
-    <a href="./" aria-label="hop home">
+    <a class="brand" href="./" aria-label="hop home">
       <picture>
         <source media="(prefers-color-scheme: dark)" srcset="logo-dark.svg">
-        <img src="logo-light.svg" alt="hop">
+        <img src="logo-light.svg" alt="hop" width="87" height="28">
       </picture>
     </a>
-    <nav>
-      <a href="https://github.com/morganseznec/hop/blob/main/docs/reference.md" class="hide-sm">Reference</a>
-      <a href="https://github.com/morganseznec/hop/blob/main/CHANGELOG.md" class="hide-sm">Changelog</a>
-      <a href="https://github.com/morganseznec/hop/releases">Releases</a>
-      <a href="https://github.com/morganseznec/hop">GitHub</a>
+    <nav class="links" aria-label="Main">
+      <a class="opt" href="#features">Features</a>
+      <a class="opt" href="#trust">Security</a>
+      <a class="opt" href="#install">Install</a>
+      <a class="opt" href="https://github.com/morganseznec/hop/blob/main/docs/reference.md">Docs</a>
+      <a class="gh" href="https://github.com/morganseznec/hop" aria-label="hop on GitHub">
+        <svg viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/></svg>
+        GitHub
+      </a>
     </nav>
   </div>
 </header>
 
 <main>
-  <div class="hero">
+  <section class="hero">
     <div class="wrap">
-      <h1>Reach any EC2 instance in any of your AWS accounts with one command.</h1>
-      <p class="lead">hop finds your instances across every AWS profile on your machine, lets you pick one by name, and opens an AWS Systems Manager Session Manager shell. No SSH keys, no bastion, no instance IDs to copy.</p>
-      <div class="cta">
-        <a class="btn primary" href="#install">Install</a>
-        <a class="btn" href="https://github.com/morganseznec/hop">View on GitHub</a>
+      <a class="pill" href="https://github.com/morganseznec/hop/releases/latest"><b>New</b> Signed releases with SLSA level 3 provenance <span aria-hidden="true">&rarr;</span></a>
+      <h1>Every EC2 instance, <span class="grad">one hop</span> away.</h1>
+      <p class="lead">hop searches every AWS profile on your machine, picks the instance you mean by name, words, ID or IP, and opens a Session Manager shell. No SSH keys. No bastion. No instance IDs to copy.</p>
+      <div class="actions">
+        <a class="btn primary" href="#install">Get started</a>
+        <a class="btn" href="https://github.com/morganseznec/hop">Star on GitHub</a>
+      </div>
+      <div>
+        <div class="cmd"><span class="p">$</span><code id="hero-cmd">brew install --cask morganseznec/tap/hop-cli</code><button class="copy" type="button" data-copy="#hero-cmd" aria-label="Copy the install command"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="9" width="12" height="12" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/></svg></button></div>
+        <p class="hint" id="hero-hint">macOS with Homebrew. <a href="#install">Linux, Windows, Docker and Go</a></p>
       </div>
 
-      <div class="install" id="install">
-        <div class="tabs" role="tablist" aria-label="Install hop">
-          <input type="radio" name="t" id="t-brew" checked><label for="t-brew">macOS</label>
-          <input type="radio" name="t" id="t-linux"><label for="t-linux">Linux</label>
-          <input type="radio" name="t" id="t-win"><label for="t-win">Windows</label>
-          <input type="radio" name="t" id="t-docker"><label for="t-docker">Docker</label>
-          <input type="radio" name="t" id="t-go"><label for="t-go">Go</label>
+      <div class="stage">
+        <div class="term" role="img" aria-label="Example: hop finds acme-p-shop-app among every profile and opens a logged Session Manager shell">
+          <div class="bar"><i></i><i></i><i></i><span>~ zsh</span></div>
+<pre id="demo"><span class="t-p">$</span> hop shop app
+<span class="t-d">hop: 15 profiles, each in its own region: 1 match</span>
+<span class="t-b">hop: session LOGGED</span> on acme-p-shop-app (i-0abc1234def567890, acme-prod, eu-west-1)
+     to /acme/ssm/sessions. Everything that follows is recorded.
 
-          <div class="panel" id="p-brew">
-<pre class="code">brew install --cask morganseznec/tap/hop-cli</pre>
-            <p>Installs the <code>hop</code> command and <code>session-manager-plugin</code>. Always use the full name the first time: Homebrew's main repository has an unrelated <code>hop</code> cask.</p>
-          </div>
-          <div class="panel" id="p-linux">
-<pre class="code"># Debian, Ubuntu
-sudo dpkg -i hop_&lt;version&gt;_amd64.deb
-# Fedora, RHEL, Amazon Linux
-sudo rpm -i hop-&lt;version&gt;-1.x86_64.rpm
-# Arch Linux
-sudo pacman -U hop-&lt;version&gt;-1-x86_64.pkg.tar.zst</pre>
-            <p>Packages for amd64 and arm64 (and Alpine <code>.apk</code>) are on every <a href="https://github.com/morganseznec/hop/releases/latest">release</a>. hop also needs the AWS <a href="https://docs.aws.amazon.com/systems-manager/latest/userguide/session-manager-working-with-install-plugin.html">Session Manager plugin</a>.</p>
-          </div>
-          <div class="panel" id="p-win">
-<pre class="code">Download hop_&lt;version&gt;_windows_amd64.zip (or arm64)
-from the latest release and put hop.exe on your PATH.</pre>
-            <p>Get it from the <a href="https://github.com/morganseznec/hop/releases/latest">latest release</a>, and install the AWS <a href="https://docs.aws.amazon.com/systems-manager/latest/userguide/session-manager-working-with-install-plugin.html">Session Manager plugin</a>.</p>
-          </div>
-          <div class="panel" id="p-docker">
-<pre class="code">docker run --rm -it --user "$(id -u):$(id -g)" \
-  -v ~/.aws:/home/hop/.aws:ro -v hop-cache:/tmp/hop \
-  ghcr.io/morganseznec/hop ls</pre>
-            <p>Alpine, non-root, no package manager, signed, with the plugin built from source. Sign in to SSO on the host.</p>
-          </div>
-          <div class="panel" id="p-go">
-<pre class="code">go install github.com/morganseznec/hop/cmd/hop@latest</pre>
-            <p>Needs Go 1.27 or later, and the AWS <a href="https://docs.aws.amazon.com/systems-manager/latest/userguide/session-manager-working-with-install-plugin.html">Session Manager plugin</a>.</p>
-          </div>
+Starting session with SessionId: alice-0a1b2c3d4e5f67890
+sh-5.2$ <span class="caret"></span></pre>
         </div>
       </div>
     </div>
-  </div>
+  </section>
 
-  <section>
-    <div class="wrap demo">
-      <div>
-        <h2>Type what you remember</h2>
-        <p class="sub">A name, a few words, an instance ID or a private IP. hop searched every profile, each in its own region, checked your SSO token and whether the account logs sessions, then connected.</p>
+  <section id="map">
+    <div class="wrap">
+      <div class="center">
+        <p class="eyebrow">One hop</p>
+        <h2>From your terminal to any account, any region.</h2>
+        <p class="sub">hop keeps a live map of every instance your AWS profiles can reach, and goes straight to the one you name.</p>
       </div>
-      <div class="term" aria-label="Example: connecting with hop">
-        <div class="bar"><span></span><span></span><span></span></div>
-<pre><span class="p">$</span> hop shop app
-<span class="d">hop: session LOGGED on acme-p-shop-app (i-0abc1234def567890, acme-prod, eu-west-1) to /acme/ssm/sessions. Everything that follows is recorded.</span>
+      <div class="map reveal">
+        <svg viewBox="0 0 900 460" role="img" aria-labelledby="map-t">
+          <title id="map-t">hop in the middle, connected to six AWS accounts in different regions, each with its instances</title>
+          <g id="arcs">
+            <path class="arc" id="a1" d="M450 230 Q 290 70 150 110"/>
+            <path class="arc" id="a2" d="M450 230 Q 270 330 140 330"/>
+            <path class="arc" id="a3" d="M450 230 Q 380 420 320 400"/>
+            <path class="arc" id="a4" d="M450 230 Q 530 420 590 400"/>
+            <path class="arc" id="a5" d="M450 230 Q 640 330 760 330"/>
+            <path class="arc" id="a6" d="M450 230 Q 610 70 750 110"/>
+          </g>
+          <g class="packets" aria-hidden="true">
+            <circle class="packet" r="4"><animateMotion dur="2.6s" repeatCount="indefinite" begin="0s"><mpath href="#a1"/></animateMotion></circle>
+            <circle class="packet" r="4"><animateMotion dur="2.6s" repeatCount="indefinite" begin="0.45s"><mpath href="#a6"/></animateMotion></circle>
+            <circle class="packet" r="4"><animateMotion dur="2.6s" repeatCount="indefinite" begin="0.9s"><mpath href="#a3"/></animateMotion></circle>
+            <circle class="packet" r="4"><animateMotion dur="2.6s" repeatCount="indefinite" begin="1.35s"><mpath href="#a5"/></animateMotion></circle>
+            <circle class="packet" r="4"><animateMotion dur="2.6s" repeatCount="indefinite" begin="1.8s"><mpath href="#a2"/></animateMotion></circle>
+            <circle class="packet" r="4"><animateMotion dur="2.6s" repeatCount="indefinite" begin="2.25s"><mpath href="#a4"/></animateMotion></circle>
+          </g>
 
-Starting session with SessionId: alice-0a1b2c3d4e5f67890
-sh-5.2$</pre>
+          <g class="node"><rect x="60" y="80" width="170" height="62" rx="14"/><text class="n" x="78" y="106">acme-prod</text><text class="r" x="78" y="127">eu-west-1</text><circle class="on" cx="196" cy="102" r="4"/><circle class="on" cx="208" cy="102" r="4"/><circle class="on" cx="196" cy="116" r="4"/><circle class="off" cx="208" cy="116" r="4"/></g>
+          <g class="node"><rect x="50" y="300" width="170" height="62" rx="14"/><text class="n" x="68" y="326">acme-test</text><text class="r" x="68" y="347">us-east-1</text><circle class="on" cx="186" cy="322" r="4"/><circle class="on" cx="198" cy="322" r="4"/></g>
+          <g class="node"><rect x="232" y="370" width="176" height="62" rx="14"/><text class="n" x="250" y="396">acme-data</text><text class="r" x="250" y="417">eu-central-1</text><circle class="on" cx="386" cy="392" r="4"/></g>
+          <g class="node"><rect x="500" y="370" width="176" height="62" rx="14"/><text class="n" x="518" y="396">globex</text><text class="r" x="518" y="417">af-south-1</text><circle class="on" cx="642" cy="392" r="4"/><circle class="on" cx="654" cy="392" r="4"/><circle class="off" cx="642" cy="406" r="4"/></g>
+          <g class="node"><rect x="680" y="300" width="170" height="62" rx="14"/><text class="n" x="698" y="326">initech</text><text class="r" x="698" y="347">ap-south-1</text><circle class="on" cx="816" cy="322" r="4"/><circle class="on" cx="828" cy="322" r="4"/></g>
+          <g class="node"><rect x="670" y="80" width="170" height="62" rx="14"/><text class="n" x="688" y="106">globex-dev</text><text class="r" x="688" y="127">us-west-2</text><circle class="on" cx="806" cy="102" r="4"/><circle class="on" cx="818" cy="102" r="4"/><circle class="on" cx="806" cy="116" r="4"/></g>
+
+          <circle class="hub-ring" cx="450" cy="230" r="58"/>
+          <circle class="hub-ring two" cx="450" cy="230" r="58"/>
+          <circle class="hub" cx="450" cy="230" r="58"/>
+          <text class="hub-t" x="450" y="232" text-anchor="middle">hop</text>
+          <text class="hub-s" x="450" y="254" text-anchor="middle">your terminal</text>
+        </svg>
       </div>
-      <div class="term" aria-label="Example: the inventory">
-        <div class="bar"><span></span><span></span><span></span></div>
-<pre><span class="p">$</span> hop ls
+      <div class="legend"><span><i style="background:var(--mint)"></i>SSM agent online</span><span><i style="background:var(--amber)"></i>agent lost or stopped</span><span>Fictional accounts</span></div>
+    </div>
+  </section>
+
+  <section id="how">
+    <div class="wrap">
+      <p class="eyebrow">How it works</p>
+      <h2>Type what you remember. hop does the rest.</h2>
+      <p class="sub">No more hunting for the right profile, region and instance ID before every connection.</p>
+      <div class="steps">
+        <div class="step reveal"><h3>Inventory</h3><p>Every profile in <code>~/.aws/config</code> is queried in its own region, in parallel, then cached. One SSO login covers every account behind a portal.</p></div>
+        <div class="step reveal"><h3>Match</h3><p>A name, a few words, an ID or a private IP. One clear match connects; anything ambiguous opens a fuzzy picker. A typo never acts on its own.</p></div>
+        <div class="step reveal"><h3>Connect</h3><p>Before the shell, hop checks your token and tells you whether the account records the session, and where.</p></div>
+      </div>
+    </div>
+  </section>
+
+  <section id="features">
+    <div class="wrap">
+      <p class="eyebrow">Features</p>
+      <h2>Session Manager, without the ceremony.</h2>
+      <p class="sub">One small binary for the whole fleet, from your laptop or a container.</p>
+      <div class="bento">
+        <article class="card c-4 reveal">
+          <div class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 7l9-4 9 4-9 4-9-4z"/><path d="M3 12l9 4 9-4"/><path d="M3 17l9 4 9-4"/></svg></div>
+          <h3>Every account, at a glance</h3>
+          <p>One inventory for all your profiles and regions, with agent status and session logging per account.</p>
+<div class="mini"><span class="t-p">$</span> hop ls
   NAME             PROFILE    REGION     ENV   IP          AGENT        LOGGING
   acme-p-shop-app  acme-prod  eu-west-1  prod  10.0.1.21   online       yes
   acme-p-tools     acme-prod  eu-west-1  prod  10.0.1.40   online       yes
-  acme-p-batch     acme-prod  us-east-1  prod  10.8.2.15   <span class="w">lost 3h ago</span>  yes
-  acme-t-api       acme-test  eu-west-1  test  10.20.1.30  online       <span class="w">NO</span>
-<span class="d">4 instances, 2 profiles, regions eu-west-1, us-east-1 (cached 4m ago, --refresh to query again)</span></pre>
+  acme-p-batch     acme-prod  us-east-1  prod  10.8.2.15   <span class="t-w">lost 3h ago</span>  yes
+  acme-t-api       acme-test  eu-west-1  test  10.20.1.30  online       <span class="t-w">NO</span></div>
+        </article>
+        <article class="card c-2 reveal">
+          <div class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="11" width="18" height="10" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg></div>
+          <h3>SSO that just works</h3>
+          <p>Profiles are grouped by portal, so one <code>hop login</code> signs in to all of them. An expired token is caught before connecting, not after.</p>
+        </article>
+        <article class="card c-2 reveal">
+          <div class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3"/></svg></div>
+          <h3>Knows if you are recorded</h3>
+          <p>hop reads each account's Session Manager settings and shows where a session is logged. <code>transcript: require</code> refuses the rest.</p>
+        </article>
+        <article class="card c-4 reveal">
+          <div class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="4 17 10 11 4 5"/><line x1="12" y1="19" x2="20" y2="19"/></svg></div>
+          <h3>More than shells</h3>
+          <p>Run a command and keep its exit code, forward a port (also to a database behind the instance), copy a small file with a SHA-256 check.</p>
+          <div class="chips"><span class="chip">hop run tools uptime</span><span class="chip">hop tunnel db 5432 --host db.internal</span><span class="chip">hop push ./app.conf tools /etc/app.conf</span></div>
+        </article>
+        <article class="card c-3 reveal">
+          <div class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></svg></div>
+          <h3>A health check for your AWS setup</h3>
+          <p><code>hop doctor</code> spots expired tokens, revoked or long-lived keys, profiles defined twice and accounts that do not log sessions, each with the command that fixes it.</p>
+        </article>
+        <article class="card c-3 reveal">
+          <div class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="2" y="4" width="20" height="14" rx="2"/><path d="M8 22h8M12 18v4"/></svg></div>
+          <h3>Everywhere you work</h3>
+          <p>macOS, Linux and Windows on amd64 and arm64, a hardened Docker image, and completion for zsh, bash, fish and PowerShell.</p>
+        </article>
       </div>
     </div>
   </section>
 
-  <section class="soft">
+  <section id="safety">
     <div class="wrap">
-      <h2>Everything Session Manager, without the ceremony</h2>
-      <p class="sub">One tool for the whole fleet, from your laptop or a container.</p>
-      <div class="grid">
-        <div class="card"><h3>Every account, one command</h3><p>Each profile is queried in its own region, in parallel, and cached. <code>hop scan</code> finds instances in regions you forgot.</p></div>
-        <div class="card"><h3>SSO that just works</h3><p>Profiles are grouped by SSO portal: one <code>hop login</code> covers every account behind it. An expired token is caught before connecting.</p></div>
-        <div class="card"><h3>More than shells</h3><p><code>hop run</code> keeps the remote exit code, <code>hop tunnel</code> forwards ports (also to hosts behind the instance), <code>hop push</code> copies small files with a SHA-256 check.</p></div>
-        <div class="card"><h3>Knows if you are recorded</h3><p>Before a shell, hop reads the account's Session Manager preferences and shows where the session is logged, or warns you. <code>transcript: require</code> refuses unlogged sessions.</p></div>
-        <div class="card"><h3>A health check for your AWS setup</h3><p><code>hop doctor</code> spots expired tokens, revoked or long-lived keys, profiles defined twice and unlogged accounts, each with the command that fixes it.</p></div>
-        <div class="card"><h3>Everywhere you work</h3><p>macOS, Linux and Windows, on amd64 and arm64, with zsh, bash, fish and PowerShell completion.</p></div>
+      <p class="eyebrow">Safe by default</p>
+      <h2>It opens shells on real servers. So it never guesses.</h2>
+      <p class="sub">Every shortcut hop takes has a guard behind it.</p>
+      <div class="steps">
+        <div class="step reveal"><h3>Exact, or it asks</h3><p>An IP or instance ID must match exactly: <code>10.0.1.2</code> never picks <code>10.0.1.21</code>. Anything partial asks first.</p></div>
+        <div class="step reveal"><h3>Fresh before acting</h3><p>When its data is over a minute old, hop looks the chosen instance up again. Stopped, renamed or replaced? It stops.</p></div>
+        <div class="step reveal"><h3>No terminal, no guess</h3><p>In scripts hop lists the candidates and stops, and <code>run</code> and <code>push</code> default to no.</p></div>
       </div>
+    </div>
+  </section>
+
+  <section id="trust">
+    <div class="wrap trust">
+      <div>
+        <p class="eyebrow">Supply chain</p>
+        <h2>Releases you can verify, not just trust.</h2>
+        <p class="sub">Every release is built by GitHub Actions from a reviewed commit on main, signed, and shipped with provenance anyone can check.</p>
+        <div class="badges">
+          <div class="badge reveal"><strong>Signed with Sigstore</strong><span>Checksums and images, keyless cosign</span></div>
+          <div class="badge reveal"><strong>SLSA level 3</strong><span>Provenance attached to every release</span></div>
+          <div class="badge reveal"><strong>Scanned</strong><span>CodeQL, govulncheck, Trivy, fuzzing</span></div>
+          <div class="badge reveal"><strong>OpenSSF Scorecard</strong><span><a href="https://scorecard.dev/viewer/?uri=github.com/morganseznec/hop">See the report</a></span></div>
+        </div>
+      </div>
+      <div class="verify reveal">
+        <div class="term">
+          <div class="bar"><i></i><i></i><i></i><span>verify a download</span></div>
+<pre><span class="t-p">$</span> gh attestation verify hop_&lt;version&gt;_linux_amd64.tar.gz \
+    --repo morganseznec/hop \
+    --signer-workflow morganseznec/hop/.github/workflows/release.yml
+<span class="t-ok">&#10003;</span> Verification succeeded!
+
+<span class="t-p">$</span> slsa-verifier verify-artifact hop_&lt;version&gt;_linux_amd64.tar.gz \
+    --provenance-path hop.intoto.jsonl \
+    --source-uri github.com/morganseznec/hop --source-tag v&lt;version&gt;
+<span class="t-ok">PASSED:</span> SLSA verification passed</pre>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section id="install">
+    <div class="wrap install">
+      <div class="center">
+        <p class="eyebrow">Install</p>
+        <h2>Up and running in a minute.</h2>
+        <p class="sub">hop needs the AWS Session Manager plugin, and the AWS CLI only to sign in to SSO.</p>
+      </div>
+      <div class="tabs" role="tablist" aria-label="Platform">
+        <button role="tab" id="tab-mac" aria-controls="pan-mac" aria-selected="true">macOS</button>
+        <button role="tab" id="tab-linux" aria-controls="pan-linux" aria-selected="false" tabindex="-1">Linux</button>
+        <button role="tab" id="tab-win" aria-controls="pan-win" aria-selected="false" tabindex="-1">Windows</button>
+        <button role="tab" id="tab-docker" aria-controls="pan-docker" aria-selected="false" tabindex="-1">Docker</button>
+        <button role="tab" id="tab-go" aria-controls="pan-go" aria-selected="false" tabindex="-1">Go</button>
+      </div>
+      <div class="panel" role="tabpanel" id="pan-mac" aria-labelledby="tab-mac">
+        <div class="block"><pre id="c-mac">brew install --cask morganseznec/tap/hop-cli</pre><button class="copy" type="button" data-copy="#c-mac" aria-label="Copy"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="9" width="12" height="12" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/></svg></button></div>
+        <p>Installs the <code>hop</code> command and <code>session-manager-plugin</code>. Use the full name the first time: Homebrew's main repository has an unrelated <code>hop</code> cask.</p>
+      </div>
+      <div class="panel" role="tabpanel" id="pan-linux" aria-labelledby="tab-linux" hidden>
+        <div class="block"><pre id="c-linux"><span class="t-d"># Debian, Ubuntu</span>
+sudo dpkg -i hop_&lt;version&gt;_amd64.deb
+<span class="t-d"># Fedora, RHEL, Amazon Linux</span>
+sudo rpm -i hop-&lt;version&gt;-1.x86_64.rpm
+<span class="t-d"># Arch Linux</span>
+sudo pacman -U hop-&lt;version&gt;-1-x86_64.pkg.tar.zst</pre><button class="copy" type="button" data-copy="#c-linux" aria-label="Copy"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="9" width="12" height="12" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/></svg></button></div>
+        <p>amd64 and arm64 packages, and Alpine <code>.apk</code>, are on every <a href="https://github.com/morganseznec/hop/releases/latest">release</a>. Also install the <a href="https://docs.aws.amazon.com/systems-manager/latest/userguide/session-manager-working-with-install-plugin.html">Session Manager plugin</a>.</p>
+      </div>
+      <div class="panel" role="tabpanel" id="pan-win" aria-labelledby="tab-win" hidden>
+        <div class="block"><pre id="c-win">go install github.com/morganseznec/hop/cmd/hop@latest</pre><button class="copy" type="button" data-copy="#c-win" aria-label="Copy"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="9" width="12" height="12" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/></svg></button></div>
+        <p>Or download <code>hop_&lt;version&gt;_windows_amd64.zip</code> (or arm64) from the <a href="https://github.com/morganseznec/hop/releases/latest">latest release</a> and put <code>hop.exe</code> on your PATH. Install the <a href="https://docs.aws.amazon.com/systems-manager/latest/userguide/session-manager-working-with-install-plugin.html">Session Manager plugin</a>; completion with <code>hop completion powershell</code>.</p>
+      </div>
+      <div class="panel" role="tabpanel" id="pan-docker" aria-labelledby="tab-docker" hidden>
+        <div class="block"><pre id="c-docker">docker run --rm -it --user "$(id -u):$(id -g)" \
+  -v ~/.aws:/home/hop/.aws:ro -v hop-cache:/tmp/hop \
+  ghcr.io/morganseznec/hop ls</pre><button class="copy" type="button" data-copy="#c-docker" aria-label="Copy"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="9" width="12" height="12" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/></svg></button></div>
+        <p>Alpine, non-root, no package manager, signed, with the plugin built from source. Sign in to SSO on the host.</p>
+      </div>
+      <div class="panel" role="tabpanel" id="pan-go" aria-labelledby="tab-go" hidden>
+        <div class="block"><pre id="c-go">go install github.com/morganseznec/hop/cmd/hop@latest</pre><button class="copy" type="button" data-copy="#c-go" aria-label="Copy"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="9" width="12" height="12" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/></svg></button></div>
+        <p>Needs Go 1.27 or later, and the <a href="https://docs.aws.amazon.com/systems-manager/latest/userguide/session-manager-working-with-install-plugin.html">Session Manager plugin</a>.</p>
+      </div>
+    </div>
+  </section>
+
+  <section id="faq">
+    <div class="wrap faq">
+      <div class="center">
+        <p class="eyebrow">Questions</p>
+        <h2>Good to know.</h2>
+      </div>
+      <details><summary>Do my instances need SSH or a public IP?</summary><p>No. hop uses AWS Systems Manager Session Manager: the instance needs the SSM agent online, an instance role such as <code>AmazonSSMManagedInstanceCore</code>, and outbound HTTPS to the SSM endpoints (or VPC endpoints). No inbound port, no key.</p></details>
+      <details><summary>Does hop store my AWS credentials?</summary><p>No. It reads profile names from <code>~/.aws</code> and lets the AWS SDK and the Session Manager plugin resolve credentials, like the AWS CLI. Error messages are scrubbed of keys and tokens before they are printed or cached.</p></details>
+      <details><summary>Which IAM permissions does it need?</summary><p>Read access to the EC2 and SSM inventory, <code>ssm:StartSession</code> for shells and tunnels, and <code>ssm:SendCommand</code> for run and push. The <a href="https://github.com/morganseznec/hop#iam-permissions">README</a> has a ready-to-paste policy.</p></details>
+      <details><summary>How is it different from <code>aws ssm start-session</code>?</summary><p>That command needs the instance ID, the profile and the region. hop finds the instance across every profile and region for you, signs in once per SSO portal, checks session logging and never acts on a fuzzy match.</p></details>
+      <details><summary>Is it free?</summary><p>Yes, MIT licensed and open source. If it saves you time, you can <a href="https://ko-fi.com/B0F429R66U">buy me a coffee</a>.</p></details>
     </div>
   </section>
 
   <section>
     <div class="wrap">
-      <h2>Safe by default</h2>
-      <p class="sub">hop opens shells on real servers, so it never guesses.</p>
-      <div class="grid">
-        <div class="card"><h3>Exact or it asks</h3><p>It acts on its own only on an unambiguous match. An IP or instance ID must match exactly: <code>10.0.1.2</code> never picks <code>10.0.1.21</code>.</p></div>
-        <div class="card"><h3>Fresh before acting</h3><p>When its data is more than a minute old, hop looks the chosen instance up again. A stopped, renamed or replaced instance is never acted on.</p></div>
-        <div class="card"><h3>No terminal, no guess</h3><p>In scripts, hop lists the candidates and stops. <code>run</code> and <code>push</code> default to no when they ask.</p></div>
+      <div class="final reveal">
+        <h2>Stop copying instance IDs.</h2>
+        <p class="sub" style="margin-inline:auto">Install hop and reach your next instance by name.</p>
+        <div class="actions">
+          <a class="btn primary" href="#install">Install hop</a>
+          <a class="btn" href="https://github.com/morganseznec/hop">Read the docs</a>
+        </div>
       </div>
-    </div>
-  </section>
-
-  <section class="soft">
-    <div class="wrap">
-      <h2>Releases you can verify</h2>
-      <p class="sub">Built by GitHub Actions from tagged commits on main, with signatures and provenance anyone can check.</p>
-      <div class="grid">
-        <div class="card"><h3>Signed</h3><p>Checksums and container images are signed keylessly with Sigstore <code>cosign</code>.</p></div>
-        <div class="card"><h3>SLSA level 3 provenance</h3><p>Every release carries <code>hop.intoto.jsonl</code>, checkable with <code>slsa-verifier</code> and <code>gh attestation verify</code>.</p></div>
-        <div class="card"><h3>Scanned and pinned</h3><p>CodeQL, govulncheck, fuzzing, Trivy, actions pinned by commit, an <a href="https://scorecard.dev/viewer/?uri=github.com/morganseznec/hop">OpenSSF Scorecard</a>.</p></div>
-      </div>
-      <p style="margin-top:24px"><a href="https://github.com/morganseznec/hop#verify-what-you-downloaded">How to verify a download</a></p>
-    </div>
-  </section>
-
-  <section>
-    <div class="wrap">
-      <h2>Commands</h2>
-      <p class="sub">The full list is in <code>hop --help</code> and the <a href="https://github.com/morganseznec/hop/blob/main/docs/reference.md">reference</a>.</p>
-      <table class="usage">
-        <tr><td>Pick an instance from the whole fleet</td><td><code>hop</code></td></tr>
-        <tr><td>Connect by name, words, ID or IP</td><td><code>hop shop app</code>, <code>hop i-0abc12...</code>, <code>hop 10.0.1.21</code></td></tr>
-        <tr><td>Narrow down</td><td><code>hop -p 'acme-*' -e prod</code>, <code>hop -r us-east-1 tools</code></td></tr>
-        <tr><td>Inventory</td><td><code>hop ls</code>, <code>hop ls --all</code>, <code>hop ls --json</code></td></tr>
-        <tr><td>One-off command</td><td><code>hop run tools uptime</code></td></tr>
-        <tr><td>Port forwarding</td><td><code>hop tunnel tools 5432 15432 --host db.internal</code></td></tr>
-        <tr><td>Copy a small file</td><td><code>hop push ./app.conf tools /etc/app.conf</code></td></tr>
-        <tr><td>SSO login, health check, forgotten regions</td><td><code>hop login</code>, <code>hop doctor</code>, <code>hop scan</code></td></tr>
-      </table>
     </div>
   </section>
 </main>
 
 <footer>
   <div class="wrap">
-    <span>hop is free and open source, under the <a href="https://github.com/morganseznec/hop/blob/main/LICENSE">MIT license</a>. Examples use fictional accounts.</span>
-    <span><a href="https://github.com/morganseznec/hop">GitHub</a> · <a href="https://github.com/morganseznec/hop/discussions">Discussions</a> · <a href="https://ko-fi.com/B0F429R66U">Support on Ko-fi</a></span>
+    <span>&copy; Morgan Seznec. MIT license. Examples use fictional accounts.</span>
+    <nav aria-label="Footer">
+      <a href="https://github.com/morganseznec/hop">GitHub</a>
+      <a href="https://github.com/morganseznec/hop/releases">Releases</a>
+      <a href="https://github.com/morganseznec/hop/blob/main/CHANGELOG.md">Changelog</a>
+      <a href="https://github.com/morganseznec/hop/discussions">Discussions</a>
+      <a href="https://github.com/morganseznec/hop/security/policy">Security</a>
+      <a href="https://ko-fi.com/B0F429R66U">Support on Ko-fi</a>
+    </nav>
   </div>
 </footer>
 
+<script>
+(() => {
+  const reduce = matchMedia("(prefers-reduced-motion: reduce)").matches;
+
+  // The hop map's packets are SMIL: pause them when motion is reduced.
+  const map = document.querySelector(".map svg");
+  if (reduce && map && map.pauseAnimations) { map.pauseAnimations(); document.querySelectorAll(".packet").forEach((p) => p.remove()); }
+
+  // Copy buttons: copy the command, without comment lines.
+  const tick = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="20 6 9 17 4 12"/></svg>';
+  document.querySelectorAll(".copy").forEach((b) => {
+    const icon = b.innerHTML;
+    b.addEventListener("click", async () => {
+      const el = document.querySelector(b.dataset.copy);
+      const text = el.innerText.split("\n").filter((l) => !l.trim().startsWith("#")).join("\n").trim();
+      try { await navigator.clipboard.writeText(text); } catch { return; }
+      b.innerHTML = tick; b.classList.add("done"); b.setAttribute("aria-label", "Copied");
+      setTimeout(() => { b.innerHTML = icon; b.classList.remove("done"); b.setAttribute("aria-label", "Copy"); }, 1600);
+    });
+  });
+
+  // Install tabs, opening on the visitor's platform.
+  const tabs = [...document.querySelectorAll('[role="tab"]')];
+  const select = (t, focus) => {
+    tabs.forEach((x) => {
+      const on = x === t;
+      x.setAttribute("aria-selected", on); x.tabIndex = on ? 0 : -1;
+      document.getElementById(x.getAttribute("aria-controls")).hidden = !on;
+    });
+    if (focus) t.focus();
+  };
+  tabs.forEach((t, i) => {
+    t.addEventListener("click", () => select(t));
+    t.addEventListener("keydown", (e) => {
+      const d = e.key === "ArrowRight" ? 1 : e.key === "ArrowLeft" ? -1 : 0;
+      if (d) { e.preventDefault(); select(tabs[(i + d + tabs.length) % tabs.length], true); }
+    });
+  });
+  const ua = (navigator.userAgentData && navigator.userAgentData.platform) || navigator.platform || navigator.userAgent;
+  const hero = document.getElementById("hero-cmd"), hint = document.getElementById("hero-hint");
+  if (/win/i.test(ua)) {
+    select(document.getElementById("tab-win"));
+    hero.textContent = "go install github.com/morganseznec/hop/cmd/hop@latest";
+    hint.innerHTML = 'Windows: or take the zip from the <a href="https://github.com/morganseznec/hop/releases/latest">latest release</a>.';
+  } else if (/linux|x11/i.test(ua) && !/android/i.test(ua)) {
+    select(document.getElementById("tab-linux"));
+    hero.textContent = "go install github.com/morganseznec/hop/cmd/hop@latest";
+    hint.innerHTML = 'Linux: .deb, .rpm, .apk and Arch packages are on every <a href="https://github.com/morganseznec/hop/releases/latest">release</a>.';
+  }
+
+  // Reveal on scroll.
+  const items = document.querySelectorAll(".reveal");
+  if (reduce || !("IntersectionObserver" in window)) items.forEach((e) => e.classList.add("in"));
+  else {
+    const io = new IntersectionObserver((es) => es.forEach((e) => { if (e.isIntersecting) { e.target.classList.add("in"); io.unobserve(e.target); } }), { rootMargin: "0px 0px -8% 0px" });
+    items.forEach((e) => io.observe(e));
+  }
+
+  // Terminal: type the command, then show the output line by line, and loop.
+  const demo = document.getElementById("demo");
+  if (!reduce && demo && "IntersectionObserver" in window) {
+    const lines = demo.innerHTML.split("\n");
+    const prompt = '<span class="t-p">$</span> ';
+    const cmd = "hop shop app";
+    const play = () => {
+      let i = 0;
+      const type = () => {
+        demo.innerHTML = prompt + cmd.slice(0, i) + '<span class="caret"></span>';
+        if (i++ < cmd.length) return setTimeout(type, 60 + Math.random() * 70);
+        let n = 1;
+        const show = () => {
+          demo.innerHTML = lines.slice(0, n + 1).join("\n");
+          if (n++ < lines.length - 1) setTimeout(show, n === 2 ? 500 : 260);
+          else setTimeout(play, 6500);
+        };
+        setTimeout(show, 380);
+      };
+      type();
+    };
+    const io2 = new IntersectionObserver((es) => { if (es[0].isIntersecting) { io2.disconnect(); setTimeout(play, 400); } });
+    io2.observe(demo);
+  }
+})();
+</script>
 </body>
 </html>
