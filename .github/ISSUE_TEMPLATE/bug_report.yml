@@ -1,0 +1,29 @@
+name: Bug report
+description: Something does not work as expected
+labels: [bug]
+body:
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: The command you ran, what you expected, and what you got instead.
+    validations:
+      required: true
+  - type: textarea
+    id: doctor
+    attributes:
+      label: Output of `hop doctor`
+      description: Remove account IDs, profile names or hostnames you do not want to share.
+      render: text
+  - type: input
+    id: version
+    attributes:
+      label: hop version
+      placeholder: hop --version
+    validations:
+      required: true
+  - type: input
+    id: os
+    attributes:
+      label: OS and shell
+      placeholder: macOS 26, zsh 5.9

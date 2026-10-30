@@ -1,0 +1,80 @@
+version: 2
+
+project_name: hop
+
+before:
+  hooks:
+    - go mod verify
+
+builds:
+  - id: hop
+    main: ./cmd/hop
+    binary: hop
+    env:
+      - CGO_ENABLED=0
+    goos: [darwin, linux, windows]
+    goarch: [amd64, arm64]
+    flags:
+      - -trimpath
+    ldflags:
+      - -s -w -X github.com/morganseznec/hop/internal/cli.version={{ .Version }}
+    # Same commit, same bytes: lets anyone check a release against the sources.
+    mod_timestamp: "{{ .CommitTimestamp }}"
+
+archives:
+  - formats: [tar.gz]
+    format_overrides:
+      - goos: windows
+        formats: [zip]
+    name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    files:
+      - LICENSE
+      - README.md
+
+nfpms:
+  - id: packages
+    package_name: hop
+    file_name_template: "{{ .ConventionalFileName }}"
+    vendor: Morgan Seznec
+    maintainer: Morgan Seznec <morganseznec@users.noreply.github.com>
+    homepage: https://github.com/morganseznec/hop
+    description: Reach any EC2 instance in any of your AWS accounts and regions through Session Manager.
+    license: MIT
+    formats: [deb, rpm, apk, archlinux]
+    bindir: /usr/bin
+    contents:
+      - src: LICENSE
+        dst: /usr/share/licenses/hop/LICENSE
+
+homebrew_casks:
+  - name: hop
+    repository:
+      owner: morganseznec
+      name: homebrew-tap
+      token: '{{ index .Env "HOMEBREW_TAP_GITHUB_TOKEN" }}'
+    # Without the tap token (forks, first releases), build everything but the cask.
+    skip_upload: '{{ if index .Env "HOMEBREW_TAP_GITHUB_TOKEN" }}false{{ else }}true{{ end }}'
+    homepage: https://github.com/morganseznec/hop
+    description: Reach any EC2 instance in any of your AWS accounts and regions through Session Manager
+    license: MIT
+    dependencies:
+      - cask: session-manager-plugin
+    hooks:
+      post:
+        # The binary is not notarized: clear the quarantine flag Homebrew downloads get.
+        install: |
+          if system_command("/usr/bin/xattr", args: ["-h"]).exit_status == 0
+            system_command "/usr/bin/xattr", args: ["-dr", "com.apple.quarantine", "#{staged_path}/hop"]
+          end
+
+checksum:
+  name_template: checksums.txt
+
+changelog:
+  sort: asc
+  filters:
+    exclude:
+      - "^docs:"
+      - "^test:"
+      - "^ci:"
+      - "^chore:"
