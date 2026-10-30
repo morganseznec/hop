@@ -76,7 +76,10 @@ func TestInitRejects(t *testing.T) {
 		args []string
 		want string
 	}{
-		{"other shell", []string{"init", "bash"}, "only zsh is supported"},
+		{"other shell", []string{"init", "bash"}, "only zsh is supported: for bash, see hop completion bash --help"},
+		{"fish", []string{"init", "fish"}, "for fish, see hop completion fish --help"},
+		{"powershell", []string{"init", "powershell"}, "for powershell, see hop completion powershell --help"},
+		{"unknown shell", []string{"init", "tcsh"}, "only zsh is supported: for bash, fish or PowerShell, see hop completion --help"},
 		{"no shell", []string{"init"}, "accepts 1 arg"},
 		{"command injection", []string{"init", "zsh", "--alias", "ssm; rm -rf ~"}, "invalid alias name"},
 		{"command substitution", []string{"init", "zsh", "--alias", "$(id)"}, "invalid alias name"},

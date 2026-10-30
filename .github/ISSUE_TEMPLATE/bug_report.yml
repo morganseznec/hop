@@ -22,6 +22,19 @@ body:
       placeholder: hop --version
     validations:
       required: true
+  - type: dropdown
+    id: install
+    attributes:
+      label: Installed with
+      options:
+        - Homebrew (morganseznec/tap/hop)
+        - Linux package (deb, rpm, apk, Arch)
+        - Release archive
+        - go install
+        - Docker image
+        - Built from source
+    validations:
+      required: true
   - type: input
     id: os
     attributes:

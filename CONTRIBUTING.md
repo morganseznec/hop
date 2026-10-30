@@ -24,16 +24,29 @@ the logic around them with plain data.
 When you try your change against real accounts, use accounts you own or are allowed
 to use, and prefer `hop ls` and `hop doctor`, which are read-only.
 
+## Tests
+
+Every change of behaviour comes with tests, in the same pull request: a new feature
+gets tests of what it does, and a bug fix gets a test that fails without the fix. A
+pull request that changes behaviour without a test is not merged. Changes to
+documentation, CI or comments alone need none.
+
 ## Pull requests
 
 - One topic per pull request, with a short description of the why.
 - `gofmt`, `go vet`, the tests and the linter must pass (CI runs them).
-- Add or update tests for behaviour changes, and the README for user-facing ones.
+- Tests for every behaviour change (see above); the README, `docs/reference.md` and
+  the `Unreleased` section of [CHANGELOG.md](CHANGELOG.md) for user-facing ones.
 - Commit messages follow [Conventional Commits](https://www.conventionalcommits.org)
-  (`feat:`, `fix:`, `docs:`, `test:`, `ci:`, `chore:`): the release changelog is
-  built from them.
+  (`feat:`, `fix:`, `docs:`, `test:`, `ci:`, `chore:`): the release notes are built
+  from them.
 
 ## Releases
 
-Maintainers tag `vX.Y.Z` on `main`. GoReleaser then builds the binaries for macOS and
-Linux (amd64 and arm64) and publishes the GitHub release.
+Maintainers tag `vX.Y.Z` on `main`. The release workflow then runs GoReleaser, which
+builds hop for macOS, Linux and Windows (amd64 and arm64), packages it as `.tar.gz`
+and `.zip` archives and as `.deb`, `.rpm`, `.apk` and Arch Linux packages, signs the
+checksums, publishes the GitHub release and updates the Homebrew cask in
+`morganseznec/homebrew-tap`. The Docker workflow builds the multi-platform image
+(linux/amd64 and linux/arm64), scans, signs and pushes it to
+`ghcr.io/morganseznec/hop`.

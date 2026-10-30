@@ -451,6 +451,7 @@ func TestReportProblemsGroupsOtherCauses(t *testing.T) {
 	out := capture(t, &os.Stderr, a.reportProblems)
 	want := "hop: network error or timeout: acme-prod, globex\n" +
 		"     " + timeout + "\n" +
+		"     check the network, VPN or proxy, then hop ls --refresh\n" +
 		"hop: SSO token expired: acme-billing\n" +
 		"     failed to refresh cached credentials, token expired\n"
 	if out != want {
@@ -476,6 +477,7 @@ func TestReportProblemsRawErrors(t *testing.T) {
 	want := "hop: insufficient permissions: acme-prod, acme-prod (us-east-1)\n" +
 		"     acme-prod: operation error EC2: DescribeInstances, api error UnauthorizedOperation: You are not authorized to perform this operation.\n" +
 		"     acme-prod (us-east-1): api error AccessDenied: no ssm:DescribeInstanceInformation\n" +
+		"     the permissions hop needs: https://github.com/morganseznec/hop#iam-permissions\n" +
 		"hop: error: globex\n" +
 		"     " + strings.Repeat("x", 197) + "...\n"
 	if out != want {
@@ -490,6 +492,28 @@ func TestReportProblemsRawErrors(t *testing.T) {
 	out = capture(t, &os.Stderr, func() { printCauses(fs) })
 	if !strings.HasSuffix(out, "     p2: error 2\n     and 2 more\n") || strings.Contains(out, "p3") {
 		t.Errorf("capped causes:\n%s", out)
+	}
+}
+
+// A region the account has not enabled: the fix is to enable it, or to stop querying
+// it where it was asked for (extra_regions, or -r).
+func TestReportProblemsRegionNotEnabled(t *testing.T) {
+	isolate(t)
+	terminal(t, false, false)
+	failed := &inventory.Target{Profile: "acme-prod", Region: "ap-east-1", Err: "api error OptInRequired: fictional", ErrKind: inventory.ErrRegion}
+	cfg := &config.Config{ExtraRegions: map[string][]string{"acme-prod": {"ap-east-1"}}}
+	a := newTestApp(t, cfg, filters{}, failed)
+	out := capture(t, &os.Stderr, a.reportProblems)
+	want := "hop: region not enabled for this account: acme-prod (ap-east-1)\n" +
+		"     enable the region on the account, or remove it from extra_regions in " + configPath(t) + "\n"
+	if out != want {
+		t.Errorf("got:\n%s\nwant:\n%s", out, want)
+	}
+
+	a = newTestApp(t, nil, filters{regions: []string{"ap-east-1"}}, failed)
+	out = capture(t, &os.Stderr, a.reportProblems)
+	if !strings.HasSuffix(out, "     enable the region on the account, or leave it out of -r\n") {
+		t.Errorf("with -r:\n%s", out)
 	}
 }
 

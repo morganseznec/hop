@@ -20,9 +20,20 @@ func newRun(f *filters) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "run <instance> <command...>",
 		Short: "Run a command and print its output (replaces ssh host 'cmd')",
-		Long: `Goes through SendCommand (AWS-RunShellScript): the command is recorded by SSM.
-The remote exit code becomes hop's exit code. Options placed after the instance name
-belong to the command: "hop run tools ls -la". Linux and macOS instances only.`,
+		Long: `Run a command and print its output (replaces ssh host 'cmd').
+
+The command runs as root, through SSM Run Command (AWS-RunShellScript), and its
+output is printed once it ends: up to 24,000 characters per stream, where SSM cuts
+it. The remote exit code becomes hop's exit code. Options placed after the instance
+name belong to the command: "hop run tools ls -la". Linux and macOS instances only.
+
+Session logging does not apply: the command and its output stay in the SSM command
+history of the account and in CloudTrail. A command that has not reached the
+instance when hop stops waiting is canceled; one already running goes on.`,
+		Example: `  hop run tools uptime
+  hop run tools df -h /                       options after the instance go to the command
+  hop run tools 'journalctl -u app | tail'    quote pipes and redirections
+  hop run --timeout 15m tools /opt/backup.sh  wait longer than the default 2m`,
 		Args:              cobra.MinimumNArgs(2),
 		ValidArgsFunction: completeNth(f, 0),
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -66,11 +77,22 @@ belong to the command: "hop run tools ls -la". Linux and macOS instances only.`,
 	return cmd
 }
 
+var pushShort = fmt.Sprintf("Upload a file of up to %d KB and verify its SHA-256 (replaces scp)", session.PushLimit/1000)
+
 func newPush(f *filters) *cobra.Command {
 	return &cobra.Command{
 		Use:   "push <local-file> <instance> <remote-path>",
-		Short: fmt.Sprintf("Upload a file of up to %d KB and verify its SHA-256 (replaces scp)", session.PushLimit/1000),
-		Args:  cobra.ExactArgs(3),
+		Short: pushShort,
+		Long: pushShort + `.
+
+The file goes through SSM Run Command (AWS-RunShellScript) and is written as root to
+an absolute path on the instance. An existing file keeps its owner and mode; a new
+one belongs to root. The content stays in the SSM command history of the account and
+in CloudTrail, base64-encoded: do not push secrets this way. Linux and macOS
+instances only; for larger files, go through S3.`,
+		Example: `  hop push ./app.conf tools /etc/app/app.conf
+  hop push -p acme-prod ./motd web /etc/motd`,
+		Args: cobra.ExactArgs(3),
 		ValidArgsFunction: func(cmd *cobra.Command, args []string, toComplete string) ([]string, cobra.ShellCompDirective) {
 			switch len(args) {
 			case 0:
@@ -119,13 +141,16 @@ func newTunnel(f *filters) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "tunnel <instance> <remote-port> [local-port]",
 		Short: "Forward a port to the instance or a host it can reach (replaces ssh -L)",
-		Long: `Opens no shell, so there is nothing to log. With --host, the instance relays to
-another machine on its network (RDS, database, internal service). Without a local
-port, a remote port below 1024 is opened 8000 above, since lower ports usually need
-administrator rights.`,
+		Long: `Forward a port to the instance or a host it can reach (replaces ssh -L).
+
+Opens no shell, so Session Manager logs nothing of what goes through it. With --host,
+the instance relays to another machine on its network (RDS, database, internal
+service). Without a local port, a remote port below 1024 is opened 8000 above, since
+lower ports usually need administrator rights.`,
 		Example: `  hop tunnel tools 3000                       http://localhost:3000
   hop tunnel web 443                          https://localhost:8443
-  hop tunnel tools 5432 15432 --host db.internal`,
+  hop tunnel tools 5432 15432 --host db.internal
+  hop tunnel tools 22                         then: scp -P 8022 file user@localhost:/tmp`,
 		Args:              cobra.RangeArgs(2, 3),
 		ValidArgsFunction: completeNth(f, 0),
 		RunE: func(cmd *cobra.Command, args []string) error {

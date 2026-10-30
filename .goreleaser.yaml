@@ -38,7 +38,7 @@ nfpms:
     vendor: Morgan Seznec
     maintainer: Morgan Seznec <morganseznec@users.noreply.github.com>
     homepage: https://github.com/morganseznec/hop
-    description: Reach any EC2 instance in any of your AWS accounts and regions through Session Manager.
+    description: Reach any EC2 instance in any of your AWS accounts through Session Manager.
     license: MIT
     formats: [deb, rpm, apk, archlinux]
     bindir: /usr/bin
@@ -57,7 +57,7 @@ homebrew_casks:
     # Without the tap token (forks, first releases), build everything but the cask.
     skip_upload: '{{ if index .Env "HOMEBREW_TAP_GITHUB_TOKEN" }}false{{ else }}true{{ end }}'
     homepage: https://github.com/morganseznec/hop
-    description: Reach any EC2 instance in any of your AWS accounts and regions through Session Manager
+    description: Reach any EC2 instance in any of your AWS accounts through Session Manager
     license: MIT
     dependencies:
       - cask: session-manager-plugin

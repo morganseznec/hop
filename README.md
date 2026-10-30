@@ -6,7 +6,7 @@
 </h1>
 
 <p align="center">
-  <strong>Reach any EC2 instance in any of your AWS accounts and regions with one command.</strong>
+  <strong>Reach any EC2 instance in any of your AWS accounts with one command.</strong>
 </p>
 
 <p align="center">
@@ -26,17 +26,49 @@ bastion, no instance IDs to copy. macOS, Linux and Windows; amd64 and arm64.
 
 ```console
 $ hop shop app
+hop: session LOGGED on acme-p-shop-app (i-0abc1234def567890, acme-prod, eu-west-1) to /acme/ssm/sessions. Everything that follows is recorded.
+
+Starting session with SessionId: alice-0a1b2c3d4e5f67890
+sh-5.2$
 ```
 
-That's it. hop searched every profile in `~/.aws/config`, each in its own region,
-found `acme-p-shop-app` in `acme-prod`, checked that your SSO token is valid and that
-the account logs sessions, and connected.
+That's it. hop searched every profile in `~/.aws/config` and `~/.aws/credentials`,
+each in its own region, found `acme-p-shop-app` in `acme-prod`, checked that your SSO
+token is valid and that the account logs sessions, and connected.
+
+`hop ls` shows everything it can reach:
+
+```console
+$ hop ls
+  NAME             PROFILE    REGION     ENV   IP          AGENT        LOGGING
+  acme-p-shop-app  acme-prod  eu-west-1  prod  10.0.1.21   online       yes
+  acme-p-tools     acme-prod  eu-west-1  prod  10.0.1.40   online       yes
+  acme-p-batch     acme-prod  us-east-1  prod  10.8.2.15   lost 3h ago  yes
+  acme-t-api       acme-test  eu-west-1  test  10.20.1.30  online       NO
+4 instances, 2 profiles, regions eu-west-1, us-east-1 (cached 4m ago, --refresh to query again)
+```
+
+(Accounts, names and addresses in this README are fictional.)
+
+## Quick start
+
+```bash
+brew install --cask morganseznec/tap/hop   # macOS; see Install for Linux, Windows and Docker
+aws configure sso                          # only if you have no AWS profile yet
+hop doctor                                 # plugin, SSO tokens, keys, profiles
+hop ls                                     # every instance hop can see
+hop shop                                   # connect by a word of its name
+```
+
+A partial or fuzzy match asks before connecting. The instances must meet the
+[instance requirements](#instance-requirements), and your role needs the
+[IAM permissions](#iam-permissions) listed below.
 
 ## Features
 
-- **Every account, every region.** Each profile is queried in its own region, in
-  parallel, and cached for 15 minutes. `hop scan` finds instances hiding in regions
-  you forgot about.
+- **Every account, one command.** Each profile is queried in its own region (plus any
+  `extra_regions`), in parallel, and cached for 15 minutes. `hop scan` finds the
+  instances hiding in other regions. Hybrid nodes (`mi-...`) are listed too.
 - **Search by what you remember.** A name, part of a name, several words
   (`hop shop prod app`), an instance ID or a private IP. An unambiguous match connects
   directly; anything else opens a fuzzy picker with a preview, or asks.
@@ -55,12 +87,27 @@ the account logs sessions, and connected.
   long-lived keys, profiles defined twice, unlogged accounts and more, each with the
   command that fixes it.
 
+## Instance requirements
+
+hop goes through Systems Manager, so each instance must be a managed node:
+
+- the **SSM agent** installed and online (the AGENT column of `hop ls`). Port
+  forwarding to another host (`hop tunnel --host`) needs agent 3.1.1374.0 or later;
+- an **instance role** with the `AmazonSSMManagedInstanceCore` managed policy, or
+  Default Host Management Configuration turned on for the account and region;
+- **outbound HTTPS** to the `ssm`, `ssmmessages` and `ec2messages` endpoints of the
+  region, or VPC interface endpoints for them.
+
+On your machine, hop needs `session-manager-plugin` 1.2.497.0 or later: `hop doctor`
+checks it.
+
 ## Install
 
 hop needs the AWS
-[Session Manager plugin](https://docs.aws.amazon.com/systems-manager/latest/userguide/session-manager-working-with-install-plugin.html),
-and the [AWS CLI v2](https://docs.aws.amazon.com/cli/latest/userguide/getting-started-install.html)
-for `hop login` only.
+[Session Manager plugin](https://docs.aws.amazon.com/systems-manager/latest/userguide/session-manager-working-with-install-plugin.html).
+The [AWS CLI v2](https://docs.aws.amazon.com/cli/latest/userguide/getting-started-install.html)
+is only used to sign in to SSO portals: by `hop login`, and when hop offers to sign in
+again during a command.
 
 ### Homebrew (macOS)
 
@@ -68,11 +115,13 @@ for `hop login` only.
 brew install --cask morganseznec/tap/hop
 ```
 
-The cask also installs `session-manager-plugin`.
+The cask also installs `session-manager-plugin`. Always use the full name:
+`brew install hop`, without the tap, installs an unrelated cask from Homebrew's main
+repository.
 
 ### Linux packages
 
-Every [release](https://github.com/morganseznec/hop/releases) has `.deb`, `.rpm`,
+The [releases](https://github.com/morganseznec/hop/releases) carry `.deb`, `.rpm`,
 `.apk` (Alpine) and `.pkg.tar.zst` (Arch Linux) packages for amd64 and arm64:
 
 ```bash
@@ -96,20 +145,28 @@ go install github.com/morganseznec/hop/cmd/hop@latest
 
 ```bash
 docker run --rm -it --user "$(id -u):$(id -g)" -v ~/.aws:/home/hop/.aws:ro \
-  ghcr.io/morganseznec/hop ls
+  -v hop-cache:/tmp/hop ghcr.io/morganseznec/hop ls
 ```
 
 The image (linux/amd64 and linux/arm64) holds hop and a `session-manager-plugin`
 built from source, on Alpine, as a non-root user, without a package manager.
 
 - `--user` runs hop as you, so it can read your `~/.aws` files (they are `0600`).
-- `~/.aws` is mounted read-only: log in to SSO on the host. Drop `:ro` only if you
-  want the container to save refreshed SSO tokens there.
+- The `hop-cache` volume keeps the inventory and the recent instances between runs
+  (the image keeps them under `/tmp/hop`); without it, every run queries every
+  account again. Needs v0.1.5 or later: older images created the volume owned by root.
+- `~/.aws` is mounted read-only: sign in to SSO on the host. The image has no AWS CLI,
+  so neither `hop login` nor the sign-in hop offers on an expired token can work in
+  the container. Drop `:ro` only if you want the container to save refreshed SSO
+  tokens there.
+- hop's own configuration is read from `/home/hop/.config/hop/config.yaml`: add
+  `-v ~/.config/hop:/home/hop/.config/hop:ro` to use yours.
 - It also runs with `--read-only --tmpfs /tmp --cap-drop ALL --security-opt no-new-privileges`.
 - Port forwarding needs `--network host` (Linux only), since the plugin listens on the
   container's localhost.
 
-### Verify what you downloaded
+<details>
+<summary><strong>Verify what you downloaded</strong></summary>
 
 Release archives and images are built by GitHub Actions, with signed provenance. Check
 the exact workflow and tag that built them, not just the repository: any workflow of
@@ -151,6 +208,8 @@ The Linux packages are not signed with a repository key (hence `--allow-untruste
 for apk): check them with `gh attestation verify` instead. The macOS binary is not
 notarized, so the Homebrew cask clears its quarantine flag after install.
 
+</details>
+
 ### Shell completion
 
 zsh, in `~/.zshrc` after `compinit`:
@@ -184,16 +243,10 @@ Global flags: `-p/--profile` (glob patterns accepted), `-r/--region`, `-e/--env`
 (`prod` or `test`; `staging`, `dev`, `qa`, `uat` and the other words listed below
 select `test`), `--refresh` (ignore the cache).
 
-`hop ls --json` prints one object per instance (`id`, `name`, `profile`, `region`,
-`private_ip`, `state`, `env`, `platform`, `agent`, `last_ping`, `also_via`, `label`,
-`transcript`), and says how fresh each one is:
-
-- `fetched_at`: when its profile and region were last read successfully (RFC 3339,
-  UTC);
-- `stale`: `true` when the last read failed or is older than `cache_ttl`;
-- `error`: why the last read failed, absent when it did not.
-
-Unreachable accounts are also reported on stderr, as with `hop ls`.
+`hop ls --json` prints one object per instance, with how fresh its data is
+(`fetched_at`, `stale`, `error`). Unreachable accounts are also reported on stderr, as
+with `hop ls`. The [reference](docs/reference.md) lists every JSON field, the exit
+codes, the limits, the environment variables and where hop keeps its files.
 
 ### How search works
 
@@ -231,8 +284,8 @@ instance, and refuses any other.
 
 ### Before opening a shell
 
-1. **Credentials.** With an expired SSO token, hop offers to open the portal, then
-   carries on.
+1. **Credentials.** With an expired SSO token, hop offers to open the portal (with the
+   AWS CLI), then carries on.
 2. **Session logging.** hop reads the `SSM-SessionManagerRunShell` document of the
    account in that region. It shows where the session is logged (CloudWatch Logs or
    S3), or warns and asks when it is not. With `transcript: require`, the document is
@@ -244,19 +297,52 @@ A shell never opens without a terminal. In scripts, use `hop run`.
 
 ### What `run` and `push` leave behind
 
-`hop run` and `hop push` go through SSM Run Command, not through a session:
+`hop run` and `hop push` go through SSM Run Command (`AWS-RunShellScript`), not
+through a session:
 
+- they run as root, on Linux and macOS instances only;
 - the session logging settings (and `transcript: require`) do not apply to them;
 - the command, its parameters and its output stay in the SSM command history of the
   account (about 30 days) and in CloudTrail. For `push`, that includes the file
   content, base64-encoded. Do not push secrets this way.
 
+`hop run` prints the output once the command ends (24,000 characters per stream at
+most, where SSM cuts it) and waits 2 minutes by default (`--timeout`). A command the instance has
+not picked up when hop stops waiting is canceled.
+
+### SSH-style workflows
+
+hop has no `ssh` or `scp` of its own, but a tunnel to port 22 carries both. The
+instance needs `sshd` running and your public key in the target user's
+`~/.ssh/authorized_keys`:
+
+```bash
+hop tunnel tools 22    # hop: localhost:8022 -> acme-p-tools:22 (Ctrl-C to close)
+
+# in another terminal
+scp -P 8022 ./dump.sql ec2-user@localhost:/tmp/
+ssh -p 8022 ec2-user@localhost
+```
+
+Port 22 is below 1024, so hop listens on 8022, or on the next free port (it prints
+which). Every instance shows up as `localhost`: `-o HostKeyAlias=acme-p-tools` keeps
+their host keys apart in `known_hosts`. Session Manager does not log what goes
+through a tunnel. A `ProxyCommand` mode, to run `ssh tools` directly, is not
+available yet.
+
 ## Profiles, regions and SSO
+
+hop reads the profiles of both `~/.aws/config` and `~/.aws/credentials`, or of the
+files named by `AWS_CONFIG_FILE` and `AWS_SHARED_CREDENTIALS_FILE`. It ignores
+`AWS_PROFILE`: it queries every profile that has credentials, and `-p` narrows that
+down (`-p acme-prod`, `-p 'acme-*'`).
 
 Each profile is queried **in its own region**: the one in `~/.aws/config`, otherwise
 `default_region` from hop's config, otherwise the region of `[default]`, otherwise
-`AWS_REGION` or `AWS_DEFAULT_REGION`, otherwise `us-east-1`. Add more regions per profile with `extra_regions`, or let `hop scan`
-propose them.
+`AWS_REGION` or `AWS_DEFAULT_REGION`, otherwise `us-east-1`. Add more regions per
+profile with `extra_regions`, or let `hop scan` find them: it queries every region
+enabled on each account and proposes those that have instances. Hybrid nodes
+(`mi-...`) registered in an account and region are listed with its EC2 instances.
 
 An unreachable account does not hide the others: its last known instances stay
 visible, and hop prints the reason and the command that fixes it.
@@ -276,7 +362,8 @@ hop does not prompt for MFA codes yet: a profile that assumes a role with `mfa_s
 
 ## Configuration
 
-Optional, in `~/.config/hop/config.yaml` (`%AppData%\hop\config.yaml` on Windows):
+Optional, in `~/.config/hop/config.yaml` (`%AppData%\hop\config.yaml` on Windows,
+`$XDG_CONFIG_HOME/hop/config.yaml` when that is set):
 
 ```yaml
 # Profiles to use and to skip (glob patterns).
@@ -286,6 +373,9 @@ exclude: ["*_AdministratorAccess"]
 # Regions queried in addition to each profile's own. "hop scan" finds them.
 extra_regions:
   acme-prod: [us-east-1]
+
+# Region of the profiles that set none, before [default] and AWS_REGION.
+default_region: eu-west-1
 
 # warn (default): warn and ask. require: refuse. off: do not check.
 transcript: warn
@@ -297,6 +387,9 @@ labels:
   acme-prod: ACME
 ```
 
+`hop scan --write` rewrites this file to add regions: comments are not kept, and the
+previous version stays next to it as `config.yaml.bak`.
+
 hop also writes `~/.cache/hop/inventory.json` (instances, no credentials) and
 `~/.local/state/hop/recents.json` (recently used instances); on Windows both live in
 `%LocalAppData%\hop`. The XDG variables are honoured when set.
@@ -306,17 +399,127 @@ hop also writes `~/.cache/hop/inventory.json` (instances, no credentials) and
 | Action | Used by |
 |---|---|
 | `ec2:DescribeInstances` | inventory |
-| `ssm:DescribeInstanceInformation` | agent status |
+| `ssm:DescribeInstanceInformation` | agent status, hybrid nodes |
 | `ssm:GetDocument` | session logging check |
-| `ssm:StartSession`, `ssm:TerminateSession` | shell, tunnel |
+| `ssm:StartSession` | shell, tunnel |
+| `ssm:TerminateSession`, `ssm:ResumeSession`, `ssmmessages:OpenDataChannel` | shell, tunnel (your own sessions, also used by `session-manager-plugin`) |
+| `kms:GenerateDataKey` | shell, when the account encrypts sessions with KMS |
 | `ssm:SendCommand`, `ssm:GetCommandInvocation` | `hop run`, `hop push` |
 | `ssm:CancelCommand` | `hop run`, `hop push` (cancels a command the instance never picked up) |
 | `ec2:DescribeRegions` | `hop scan` |
 
+As a policy for your role (or permission set):
+
+```json
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "Inventory",
+      "Effect": "Allow",
+      "Action": [
+        "ec2:DescribeInstances",
+        "ec2:DescribeRegions",
+        "ssm:DescribeInstanceInformation"
+      ],
+      "Resource": "*"
+    },
+    {
+      "Sid": "SessionLoggingCheck",
+      "Effect": "Allow",
+      "Action": "ssm:GetDocument",
+      "Resource": "arn:aws:ssm:*:*:document/SSM-SessionManagerRunShell"
+    },
+    {
+      "Sid": "ShellAndTunnel",
+      "Effect": "Allow",
+      "Action": "ssm:StartSession",
+      "Resource": [
+        "arn:aws:ec2:*:*:instance/*",
+        "arn:aws:ssm:*:*:managed-instance/*",
+        "arn:aws:ssm:*:*:document/SSM-SessionManagerRunShell",
+        "arn:aws:ssm:*:*:document/AWS-StartPortForwardingSession",
+        "arn:aws:ssm:*:*:document/AWS-StartPortForwardingSessionToRemoteHost"
+      ]
+    },
+    {
+      "Sid": "OwnSessions",
+      "Effect": "Allow",
+      "Action": [
+        "ssm:TerminateSession",
+        "ssm:ResumeSession",
+        "ssmmessages:OpenDataChannel"
+      ],
+      "Resource": "arn:aws:ssm:*:*:session/${aws:userid}-*"
+    },
+    {
+      "Sid": "RunAndPush",
+      "Effect": "Allow",
+      "Action": "ssm:SendCommand",
+      "Resource": [
+        "arn:aws:ec2:*:*:instance/*",
+        "arn:aws:ssm:*:*:managed-instance/*",
+        "arn:aws:ssm:*:*:document/AWS-RunShellScript"
+      ]
+    },
+    {
+      "Sid": "FollowCommands",
+      "Effect": "Allow",
+      "Action": [
+        "ssm:GetCommandInvocation",
+        "ssm:CancelCommand"
+      ],
+      "Resource": "*"
+    },
+    {
+      "Sid": "KMSEncryptedSessions",
+      "Effect": "Allow",
+      "Action": "kms:GenerateDataKey",
+      "Resource": "arn:aws:kms:*:*:key/*"
+    }
+  ]
+}
+```
+
+The session statements follow the AWS sample policies for Session Manager. Every
+resource can be narrowed: instances to some accounts and regions, or to tags with an
+`ssm:resourceTag/...` condition, and the KMS key to the one in your session
+preferences. Drop what you do not use: `RunAndPush` and `FollowCommands` without
+`run` and `push`, `KMSEncryptedSessions` when sessions are not KMS-encrypted,
+`ec2:DescribeRegions` without `hop scan`. In AWS GovCloud (US) or China, ARNs start
+with `arn:aws-us-gov:` or `arn:aws-cn:`.
+
+The **instance role** needs more than `AmazonSSMManagedInstanceCore` when the account
+logs sessions, since the agent writes the log itself: `logs:CreateLogStream`,
+`logs:PutLogEvents`, `logs:DescribeLogGroups` and `logs:DescribeLogStreams` for
+CloudWatch Logs, or `s3:PutObject` on the bucket and `s3:GetEncryptionConfiguration`
+for S3, plus `kms:Decrypt` on the session key when sessions are KMS-encrypted.
+
+## How it compares
+
+- **`aws ssm start-session`** opens one session at a time: you give it the instance ID,
+  and the profile and region it lives in. Port forwarding takes a document name and
+  its parameters in JSON.
+- **SSH-oriented tools** such as [aws-gate](https://github.com/xen0l/aws-gate) offer an
+  SSH `ProxyCommand` integration, set up per host in `~/.ssh/config`. hop has no
+  `ProxyCommand` mode yet (see [SSH-style workflows](#ssh-style-workflows)).
+- **hop** is built around the whole fleet:
+  - one inventory of every profile, queried in parallel and cached, searchable by
+    name, words, ID or IP;
+  - one login per SSO portal, with expired tokens caught before connecting;
+  - a session logging check before each shell, and `transcript: require` to refuse
+    unlogged sessions;
+  - never acting on a fuzzy match without a question, nor on any loose match without
+    a terminal;
+  - `run` keeps the remote exit code and cancels commands the instance never picked
+    up; `push` compares the SHA-256 on both sides;
+  - `hop doctor` for the local AWS setup.
+
 ## Contributing
 
 Issues and pull requests are welcome: see [CONTRIBUTING.md](CONTRIBUTING.md). Please
-report security issues privately, as described in [SECURITY.md](SECURITY.md).
+report security issues privately, as described in [SECURITY.md](SECURITY.md). What
+changed in each version is in [CHANGELOG.md](CHANGELOG.md).
 
 ## Support
 

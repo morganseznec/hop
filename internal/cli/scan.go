@@ -28,9 +28,19 @@ func newScan(f *filters) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "scan",
 		Short: "Find instances outside the watched regions and offer to add them",
-		Long: `For each profile, queries every region enabled on the account. An instance found
-outside the profile's region (say, a test environment in us-east-1) is suggested as
-extra_regions. --write adds it to ~/.config/hop/config.yaml.`,
+		Long: `Find instances outside the watched regions and offer to add them.
+
+For each profile, queries every region enabled on the account. A region where it
+finds instances, outside the ones hop already queries for that profile (say, a test
+environment in us-east-1), is suggested as extra_regions.
+
+--write adds it to hop's configuration file, rewritten without its comments (the
+previous file is kept next to it, as config.yaml.bak):
+
+    ` + configFile(),
+		Example: `  hop scan                    list what is outside the watched regions
+  hop scan --write            add those regions to extra_regions
+  hop scan -p 'acme-*'        only the acme-* profiles`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			a, err := newApp(*f)
@@ -54,7 +64,7 @@ extra_regions. --write adds it to ~/.config/hop/config.yaml.`,
 				fmt.Fprintf(os.Stderr, "  %-24s %-14s %s\n", h.profile, h.region, strings.Join(names, ", "))
 			}
 			if !write {
-				fmt.Fprintln(os.Stderr, "\nsuggested for ~/.config/hop/config.yaml:\n\nextra_regions:")
+				fmt.Fprintf(os.Stderr, "\nsuggested for %s:\n\nextra_regions:\n", configFile())
 				for _, p := range groupHits(hits) {
 					fmt.Fprintf(os.Stderr, "  %s: [%s]\n", p.profile, strings.Join(p.regions, ", "))
 				}
@@ -73,7 +83,7 @@ extra_regions. --write adds it to ~/.config/hop/config.yaml.`,
 			if err := a.cfg.Save(); err != nil {
 				return err
 			}
-			info("regions added, previous file kept as .bak")
+			info("regions added to %s, previous file kept as config.yaml.bak", configFile())
 			return nil
 		},
 	}

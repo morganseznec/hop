@@ -31,7 +31,7 @@ RUN mkdir -p /gopath/src/github.com/aws/session-manager-plugin \
 
 FROM alpine:3.24.3@sha256:be2656061b536c1883c4034790e21d0a09c5aaaf51968b89368a3c0371ea2c9a
 LABEL org.opencontainers.image.title="hop" \
-      org.opencontainers.image.description="Reach any EC2 instance in any of your AWS accounts and regions through Session Manager" \
+      org.opencontainers.image.description="Reach any EC2 instance in any of your AWS accounts through Session Manager" \
       org.opencontainers.image.source="https://github.com/morganseznec/hop" \
       org.opencontainers.image.licenses="MIT"
 # apk is removed once the base is up to date. Its database stays, so image scanners
@@ -41,13 +41,17 @@ RUN apk upgrade --no-cache \
  && adduser -S -D -H -u 65532 -G hop -h /home/hop -s /sbin/nologin hop \
  && mkdir -p /home/hop/.aws \
  && chown -R hop:hop /home/hop \
+ && mkdir -p /tmp/hop \
+ && chmod 1777 /tmp/hop \
  && find / -xdev -type f -perm /6000 -exec chmod a-s {} + \
  && rm -rf /sbin/apk /etc/apk /var/cache/apk /usr/share/apk /usr/lib/libapk* /lib/libapk*
 COPY --from=plugin /out/session-manager-plugin /usr/local/bin/session-manager-plugin
 COPY --from=hop /out/hop /usr/local/bin/hop
 USER 65532:65532
-# Cache and state go to /tmp, so the image also runs as the host user
+# Cache and state go to /tmp/hop, so the image also runs as the host user
 # (--user "$(id -u):$(id -g)"), which is what makes a mounted ~/.aws readable on Linux.
+# /tmp/hop is world-writable with the sticky bit, like /tmp: a new named volume mounted
+# there copies that mode, so any user can keep its cache in it.
 ENV HOME=/home/hop \
     XDG_CACHE_HOME=/tmp/hop/cache \
     XDG_STATE_HOME=/tmp/hop/state

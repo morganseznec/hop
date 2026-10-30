@@ -204,7 +204,7 @@ func TestLogin(t *testing.T) {
 	}
 
 	_, _, err = runHop(t, "login", "acme-billing")
-	if err == nil || err.Error() != "not an SSO portal or profile: acme-billing" {
+	if err == nil || err.Error() != "not an SSO portal or profile: acme-billing (hop login --status lists them)" {
 		t.Errorf("static-key profile: %v", err)
 	}
 

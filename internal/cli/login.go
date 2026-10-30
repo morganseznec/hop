@@ -16,10 +16,17 @@ func newLogin(f *filters) *cobra.Command {
 	var statusOnly bool
 	cmd := &cobra.Command{
 		Use:   "login [portal|profile...]",
-		Short: "Reopen expired SSO portals, one login per portal",
-		Long: `SSO profiles are grouped by token: all profiles on the same portal open with
-a single login. With no argument, only expired portals are reopened. The sign-in
-itself is handed to "aws sso login", which drives the browser.`,
+		Short: "Sign in again to expired SSO portals, one login per portal",
+		Long: `Sign in again to expired SSO portals, one login per portal.
+
+SSO profiles are grouped by token: all profiles on the same portal open with a
+single login. With no argument, only expired portals are reopened; a portal named
+explicitly (or one of its profiles) is reopened even if its token is valid. The
+sign-in itself is handed to "aws sso login", which drives the browser: it needs the
+AWS CLI v2.`,
+		Example: `  hop login                   every expired portal in scope
+  hop login --status          each portal and its token, without signing in
+  hop login acme-sso          one portal, by its name or one of its profiles`,
 		ValidArgsFunction: func(cmd *cobra.Command, args []string, toComplete string) ([]string, cobra.ShellCompDirective) {
 			files, err := awsconf.Load()
 			if err != nil {
@@ -67,7 +74,7 @@ itself is handed to "aws sso login", which drives the browser.`,
 			for _, arg := range args {
 				pt, ok := findPortal(portals, arg)
 				if !ok {
-					return fmt.Errorf("not an SSO portal or profile: %s", arg)
+					return fmt.Errorf("not an SSO portal or profile: %s (hop login --status lists them)", arg)
 				}
 				todo = append(todo, pt)
 			}
