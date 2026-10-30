@@ -6,6 +6,13 @@ All notable changes to hop are listed here. The format follows
 
 ## [Unreleased]
 
+## [0.1.6] - 2026-10-30
+
+The changes below shipped in 0.1.6. The 0.1.5 tag points to the same commit, but its
+GitHub release never started: the list of allowed GitHub Actions did not include the
+one the SLSA provenance generator uses to upload its file. Only the 0.1.5 container
+image was published.
+
 ### Added
 
 - README: a quick start, the instance requirements, a ready-to-paste IAM policy and
@@ -154,7 +161,8 @@ First release.
   and Arch Linux packages, and a hardened Alpine image on GHCR. The Homebrew cask
   came with v0.1.1.
 
-[Unreleased]: https://github.com/morganseznec/hop/compare/v0.1.4...HEAD
+[Unreleased]: https://github.com/morganseznec/hop/compare/v0.1.6...HEAD
+[0.1.6]: https://github.com/morganseznec/hop/compare/v0.1.4...v0.1.6
 [0.1.4]: https://github.com/morganseznec/hop/compare/v0.1.3...v0.1.4
 [0.1.3]: https://github.com/morganseznec/hop/compare/v0.1.2...v0.1.3
 [0.1.2]: https://github.com/morganseznec/hop/compare/v0.1.1...v0.1.2
