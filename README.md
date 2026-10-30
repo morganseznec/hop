@@ -1,14 +1,23 @@
-# hop
+<h1 align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/logo-dark.svg">
+    <img alt="hop" src="docs/logo-light.svg" width="320">
+  </picture>
+</h1>
 
-[![CI](https://github.com/morganseznec/hop/actions/workflows/ci.yml/badge.svg)](https://github.com/morganseznec/hop/actions/workflows/ci.yml)
-[![Docker](https://github.com/morganseznec/hop/actions/workflows/docker.yml/badge.svg)](https://github.com/morganseznec/hop/actions/workflows/docker.yml)
-[![CodeQL](https://github.com/morganseznec/hop/actions/workflows/codeql.yml/badge.svg)](https://github.com/morganseznec/hop/actions/workflows/codeql.yml)
-[![OpenSSF Scorecard](https://api.scorecard.dev/projects/github.com/morganseznec/hop/badge)](https://scorecard.dev/viewer/?uri=github.com/morganseznec/hop)
-[![Go Reference](https://pkg.go.dev/badge/github.com/morganseznec/hop.svg)](https://pkg.go.dev/github.com/morganseznec/hop)
-[![Release](https://img.shields.io/github/v/release/morganseznec/hop?sort=semver)](https://github.com/morganseznec/hop/releases)
-[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+<p align="center">
+  <strong>Reach any EC2 instance in any of your AWS accounts and regions with one command.</strong>
+</p>
 
-**Reach any EC2 instance in any of your AWS accounts and regions with one command.**
+<p align="center">
+  <a href="https://github.com/morganseznec/hop/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/morganseznec/hop/actions/workflows/ci.yml/badge.svg"></a>
+  <a href="https://github.com/morganseznec/hop/actions/workflows/docker.yml"><img alt="Docker" src="https://github.com/morganseznec/hop/actions/workflows/docker.yml/badge.svg"></a>
+  <a href="https://github.com/morganseznec/hop/actions/workflows/codeql.yml"><img alt="CodeQL" src="https://github.com/morganseznec/hop/actions/workflows/codeql.yml/badge.svg"></a>
+  <a href="https://scorecard.dev/viewer/?uri=github.com/morganseznec/hop"><img alt="OpenSSF Scorecard" src="https://api.scorecard.dev/projects/github.com/morganseznec/hop/badge"></a>
+  <a href="https://pkg.go.dev/github.com/morganseznec/hop"><img alt="Go Reference" src="https://pkg.go.dev/badge/github.com/morganseznec/hop.svg"></a>
+  <a href="https://github.com/morganseznec/hop/releases"><img alt="Release" src="https://img.shields.io/github/v/release/morganseznec/hop?sort=semver"></a>
+  <a href="LICENSE"><img alt="License: MIT" src="https://img.shields.io/badge/license-MIT-blue.svg"></a>
+</p>
 
 hop finds your instances across every AWS profile on your machine, lets you pick one
 by name, and opens an AWS Systems Manager Session Manager shell. No SSH keys, no
