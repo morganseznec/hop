@@ -6,6 +6,11 @@ All notable changes to hop are listed here. The format follows
 
 ## [Unreleased]
 
+## [0.1.7] - 2026-10-30
+
+No change to the hop binary since 0.1.6: this release publishes the renamed
+Homebrew cask through the release pipeline.
+
 ### Changed
 
 - The Homebrew cask is now `hop-cli` (`brew install --cask morganseznec/tap/hop-cli`).
@@ -168,7 +173,8 @@ First release.
   and Arch Linux packages, and a hardened Alpine image on GHCR. The Homebrew cask
   came with v0.1.1.
 
-[Unreleased]: https://github.com/morganseznec/hop/compare/v0.1.6...HEAD
+[Unreleased]: https://github.com/morganseznec/hop/compare/v0.1.7...HEAD
+[0.1.7]: https://github.com/morganseznec/hop/compare/v0.1.6...v0.1.7
 [0.1.6]: https://github.com/morganseznec/hop/compare/v0.1.4...v0.1.6
 [0.1.4]: https://github.com/morganseznec/hop/compare/v0.1.3...v0.1.4
 [0.1.3]: https://github.com/morganseznec/hop/compare/v0.1.2...v0.1.3
