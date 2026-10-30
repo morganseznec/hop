@@ -595,8 +595,11 @@ func remoteShell(t *testing.T) (*fakeSSM, aws.Config, string) {
 }
 
 // runScript runs commands with the local sh and returns their output and exit code.
+// The script goes through stdin, as the SSM agent runs it from a file: as a single
+// argument (sh -c), Linux would refuse anything over 128 KiB.
 func runScript(script []string) (stdout, stderr string, code int) {
-	cmd := exec.Command("sh", "-c", strings.Join(script, "\n"))
+	cmd := exec.Command("sh", "-s")
+	cmd.Stdin = strings.NewReader(strings.Join(script, "\n") + "\n")
 	var out, errOut strings.Builder
 	cmd.Stdout, cmd.Stderr = &out, &errOut
 	if err := cmd.Run(); err != nil {
