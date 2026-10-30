@@ -109,6 +109,18 @@ gh attestation verify hop_<version>_linux_amd64.tar.gz --repo morganseznec/hop
 gh attestation verify oci://ghcr.io/morganseznec/hop:latest --repo morganseznec/hop
 ```
 
+From v0.1.2, each release also carries a Sigstore signature of `checksums.txt` and a
+SLSA level 3 provenance (`hop.intoto.jsonl`):
+
+```bash
+cosign verify-blob checksums.txt --bundle checksums.txt.sigstore.json \
+  --certificate-identity-regexp '^https://github.com/morganseznec/hop/' \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com
+sha256sum --ignore-missing -c checksums.txt
+slsa-verifier verify-artifact hop_<version>_linux_amd64.tar.gz \
+  --provenance-path hop.intoto.jsonl --source-uri github.com/morganseznec/hop
+```
+
 Images are also signed with Sigstore:
 
 ```bash

@@ -72,6 +72,14 @@ homebrew_casks:
 checksum:
   name_template: checksums.txt
 
+# Keyless Sigstore signature of the checksums, which cover every other asset.
+signs:
+  - cmd: cosign
+    artifacts: checksum
+    signature: "${artifact}.sigstore.json"
+    args: ["sign-blob", "--bundle=${signature}", "--yes", "${artifact}"]
+    output: true
+
 changelog:
   sort: asc
   filters:
