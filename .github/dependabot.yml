@@ -1,9 +1,14 @@
 version: 2
+# Version updates wait 7 days after a release is published (cooldown), so a compromised
+# release that gets yanked within days is never proposed. Security updates are not
+# delayed by the cooldown.
 updates:
   - package-ecosystem: gomod
     directory: /
     schedule:
       interval: weekly
+    cooldown:
+      default-days: 7
     groups:
       aws-sdk:
         patterns: ["github.com/aws/*"]
@@ -11,7 +16,11 @@ updates:
     directory: /
     schedule:
       interval: weekly
+    cooldown:
+      default-days: 7
   - package-ecosystem: docker
     directory: /
     schedule:
       interval: weekly
+    cooldown:
+      default-days: 7

@@ -10,6 +10,12 @@ permissions: {}
 
 env:
   IMAGE: ghcr.io/${{ github.repository }}
+  # The BuildKit image that docker/setup-buildx-action runs as the builder, and the
+  # binfmt image that docker/setup-qemu-action runs (privileged) to register QEMU,
+  # pinned by digest. Dependabot does not update them: resolve a new digest with
+  # `docker buildx imagetools inspect <image>:<tag>`.
+  BUILDKIT_IMAGE: docker.io/moby/buildkit:v0.34.1@sha256:99368f3e46177c6405b9740e4461d91cee004128daeecca78d4ceac50ec1da5c
+  BINFMT_IMAGE: docker.io/tonistiigi/binfmt:qemu-v10.2.3@sha256:400a4873b838d1b89194d982c45e5fb3cda4593fbfd7e08a02e76b03b21166f0
 
 jobs:
   scan:
@@ -23,6 +29,8 @@ jobs:
         with:
           persist-credentials: false
       - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+        with:
+          driver-opts: image=${{ env.BUILDKIT_IMAGE }}
       - uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         with:
           context: .
@@ -57,6 +65,67 @@ jobs:
           sarif_file: trivy.sarif
           category: trivy
 
+  # session-manager-plugin is built in GOPATH mode from its vendored sources: the binary
+  # carries no module information, so the image scan above does not see those
+  # dependencies. This job scans the vendor directory at the commit pinned in the
+  # Dockerfile. Trivy reads the go.mod files shipped inside the vendored modules (the
+  # versions they require); the version of each vendored module itself is not recorded
+  # upstream, so this is a partial view. It is informational and never fails the build:
+  # we cannot patch upstream's vendored code, only follow its releases.
+  plugin-vendor:
+    name: Scan session-manager-plugin vendored dependencies
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - id: plugin
+        name: Plugin commit pinned in the Dockerfile
+        run: |
+          commit=$(sed -n 's/^ARG PLUGIN_COMMIT=//p' Dockerfile)
+          if [[ ! "$commit" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "::error file=Dockerfile::no PLUGIN_COMMIT=<40 hex characters> line found"
+            exit 1
+          fi
+          echo "commit=$commit" >> "$GITHUB_OUTPUT"
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: aws/session-manager-plugin
+          ref: ${{ steps.plugin.outputs.commit }}
+          path: session-manager-plugin
+          persist-credentials: false
+      - name: Trivy on vendor/ (informational)
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          scan-type: fs
+          scan-ref: session-manager-plugin/vendor
+          scanners: vuln
+          severity: HIGH,CRITICAL
+          format: json
+          output: plugin-vendor.json
+          exit-code: "0"
+      - name: Findings (HIGH or CRITICAL)
+        env:
+          COMMIT: ${{ steps.plugin.outputs.commit }}
+        run: |
+          manifests=$(jq '[.Results[]? | select(.Class == "lang-pkgs")] | length' plugin-vendor.json)
+          findings=$(jq '[.Results[]?.Vulnerabilities[]?] | length' plugin-vendor.json)
+          echo "aws/session-manager-plugin@${COMMIT}: ${manifests} go.mod files under vendor/, ${findings} HIGH or CRITICAL findings."
+          jq -r '.Results[]? | .Target as $t | .Vulnerabilities[]? |
+            "\(.Severity)\t\(.VulnerabilityID)\t\(.PkgName) \(.InstalledVersion) (fixed in \(.FixedVersion // "none"))\t\($t)"' \
+            plugin-vendor.json | sort -u
+          if [ "$findings" -gt 0 ]; then
+            echo "::warning title=session-manager-plugin vendored dependencies::${findings} HIGH or CRITICAL findings in upstream vendored code (informational, see the job log)"
+          fi
+
+  # The image is built once and pushed by digest only. That digest is scanned for each
+  # platform, then signed and attested, and only then tagged: if a scan fails, nothing
+  # is tagged or signed (the untagged manifest left in the registry is never published
+  # under a version). No GitHub Actions cache here (no cache-from, no cache-to, no cached
+  # binfmt image or Trivy binary and database): any workflow that runs on main can write
+  # to that cache.
   publish:
     name: Publish
     if: startsWith(github.ref, 'refs/tags/v')
@@ -72,7 +141,13 @@ jobs:
         with:
           persist-credentials: false
       - uses: docker/setup-qemu-action@99012661954931238ded8c8b007157a8430204e1 # v4.4.0
+        with:
+          image: ${{ env.BINFMT_IMAGE }}
+          cache-image: false
       - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+        with:
+          driver-opts: image=${{ env.BUILDKIT_IMAGE }}
+          cache-binary: false
       - uses: docker/login-action@81c6f93d4bc991e510b342a00b419b3bb4efc5c6 # v4.7.0
         with:
           registry: ghcr.io
@@ -87,17 +162,40 @@ jobs:
             type=semver,pattern={{major}}.{{minor}}
             type=raw,value=latest,enable=${{ !contains(github.ref_name, '-') }}
       - id: build
+        name: Build and push by digest (no tag yet)
         uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         with:
           context: .
           platforms: linux/amd64,linux/arm64
-          push: true
-          tags: ${{ steps.meta.outputs.tags }}
+          outputs: type=image,name=${{ env.IMAGE }},push-by-digest=true,name-canonical=true,push=true
           labels: ${{ steps.meta.outputs.labels }}
           build-args: VERSION=${{ steps.meta.outputs.version }}
           provenance: mode=max
           sbom: true
-          cache-from: type=gha
+      # Scanned from the registry (image-src remote): exactly what was pushed.
+      - name: Trivy linux/amd64 (fails on fixable HIGH or CRITICAL)
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        env:
+          TRIVY_PLATFORM: linux/amd64
+          TRIVY_IMAGE_SRC: remote
+        with:
+          image-ref: ${{ env.IMAGE }}@${{ steps.build.outputs.digest }}
+          severity: HIGH,CRITICAL
+          ignore-unfixed: true
+          exit-code: "1"
+          cache: "false"
+      - name: Trivy linux/arm64 (fails on fixable HIGH or CRITICAL)
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        env:
+          TRIVY_PLATFORM: linux/arm64
+          TRIVY_IMAGE_SRC: remote
+        with:
+          image-ref: ${{ env.IMAGE }}@${{ steps.build.outputs.digest }}
+          severity: HIGH,CRITICAL
+          ignore-unfixed: true
+          exit-code: "1"
+          cache: "false"
+          skip-setup-trivy: true
       - uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
       - name: Sign the image (keyless)
         env:
@@ -109,3 +207,25 @@ jobs:
           subject-name: ${{ env.IMAGE }}
           subject-digest: ${{ steps.build.outputs.digest }}
           push-to-registry: true
+      # Tagged last, so a version tag never points to an image that is not yet signed
+      # and attested. With a single source index, imagetools create pushes it unchanged;
+      # the check below makes sure every tag names the digest that was scanned and signed.
+      - name: Tag the scanned and signed digest
+        env:
+          DIGEST: ${{ steps.build.outputs.digest }}
+          TAGS: ${{ steps.meta.outputs.tags }}
+        run: |
+          args=()
+          while IFS= read -r tag; do
+            if [ -n "$tag" ]; then args+=(--tag "$tag"); fi
+          done <<< "$TAGS"
+          docker buildx imagetools create "${args[@]}" "${IMAGE}@${DIGEST}"
+          while IFS= read -r tag; do
+            if [ -z "$tag" ]; then continue; fi
+            got=$(docker buildx imagetools inspect "$tag" --format '{{json .Manifest}}' | jq -r .digest)
+            if [ "$got" != "$DIGEST" ]; then
+              echo "::error::${tag} points to ${got}, not ${DIGEST}"
+              exit 1
+            fi
+            echo "${tag} -> ${DIGEST}"
+          done <<< "$TAGS"
