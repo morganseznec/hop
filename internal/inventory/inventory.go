@@ -243,7 +243,7 @@ func (inv *Inventory) Save() error {
 		err = cerr
 	}
 	if err == nil {
-		err = os.Rename(tmp.Name(), filepath.Join(dir, "inventory.json"))
+		err = replaceFile(tmp.Name(), filepath.Join(dir, "inventory.json"))
 	}
 	if err != nil {
 		os.Remove(tmp.Name())
@@ -432,7 +432,7 @@ func tryLock(p string, stale time.Duration) (release func(), ok bool) {
 	}
 	f, err := os.OpenFile(p, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
 	if err != nil {
-		if errors.Is(err, fs.ErrExist) {
+		if errors.Is(err, fs.ErrExist) || lockBusy(err) {
 			return func() {}, false
 		}
 		return func() {}, true
@@ -453,4 +453,24 @@ func tryLock(p string, stale time.Duration) (release func(), ok bool) {
 			os.Remove(p)
 		}
 	}, true
+}
+
+// lockBusy reports whether creating a lock file failed because another process holds
+// it in a way that is not "already exists": on Windows, a lock file that its holder is
+// deleting answers "access is denied" for a few milliseconds. Going ahead there would
+// let two saves overwrite each other.
+func lockBusy(err error) bool {
+	return runtime.GOOS == "windows" && errors.Is(err, fs.ErrPermission)
+}
+
+// replaceFile moves src over dst. On Windows the rename fails while another process
+// has dst open (a Load reading the cache, an antivirus scan), for as long as that read
+// takes: it is retried for up to half a second instead of losing the save.
+func replaceFile(src, dst string) error {
+	err := os.Rename(src, dst)
+	for i := 0; err != nil && runtime.GOOS == "windows" && i < 50; i++ {
+		time.Sleep(10 * time.Millisecond)
+		err = os.Rename(src, dst)
+	}
+	return err
 }

@@ -77,10 +77,21 @@ func (r Recents) Touch(key string) error {
 		err = cerr
 	}
 	if err == nil {
-		err = os.Rename(tmp.Name(), filepath.Join(d, "recents.json"))
+		err = replaceFile(tmp.Name(), filepath.Join(d, "recents.json"))
 	}
 	if err != nil {
 		os.Remove(tmp.Name())
+	}
+	return err
+}
+
+// replaceFile moves src over dst, retrying for up to half a second on Windows, where
+// the rename fails while another process has dst open.
+func replaceFile(src, dst string) error {
+	err := os.Rename(src, dst)
+	for i := 0; err != nil && runtime.GOOS == "windows" && i < 50; i++ {
+		time.Sleep(10 * time.Millisecond)
+		err = os.Rename(src, dst)
 	}
 	return err
 }
