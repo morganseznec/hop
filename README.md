@@ -17,7 +17,7 @@
   <a href="https://pkg.go.dev/github.com/morganseznec/hop"><img alt="Go Reference" src="https://pkg.go.dev/badge/github.com/morganseznec/hop.svg"></a>
   <a href="https://github.com/morganseznec/hop/releases"><img alt="Release" src="https://img.shields.io/github/v/release/morganseznec/hop?sort=semver"></a>
   <a href="LICENSE"><img alt="License: MIT" src="https://img.shields.io/badge/license-MIT-blue.svg"></a>
-  <a href="https://ko-fi.com/morganseznec"><img alt="Support on Ko-fi" src="https://img.shields.io/badge/Ko--fi-support-FF5E5B?logo=ko-fi&amp;logoColor=white"></a>
+  <a href="https://ko-fi.com/B0F429R66U"><img alt="Support on Ko-fi" src="https://img.shields.io/badge/Ko--fi-support-FF5E5B?logo=ko-fi&amp;logoColor=white"></a>
 </p>
 
 hop finds your instances across every AWS profile on your machine, lets you pick one
@@ -278,7 +278,9 @@ report security issues privately, as described in [SECURITY.md](SECURITY.md).
 ## Support
 
 hop is free and maintained on my own time. If it saves you a few logins a day, you can
-[buy me a coffee on Ko-fi](https://ko-fi.com/morganseznec).
+buy me a coffee:
+
+[![ko-fi](https://ko-fi.com/img/githubbutton_sm.svg)](https://ko-fi.com/B0F429R66U)
 
 ## License
 
