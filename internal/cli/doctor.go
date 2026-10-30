@@ -36,9 +36,17 @@ type finding struct {
 func newDoctor(f *filters) *cobra.Command {
 	return &cobra.Command{
 		Use:   "doctor",
-		Short: "Check the local AWS setup and session logging on every account",
-		Long: `Makes no network calls: reads ~/.aws, the SSO token cache and the last
-inventory. Run "hop ls" first for an up-to-date session logging status.`,
+		Short: "Check this machine's AWS setup and the cached session logging status",
+		Long: `Check this machine's AWS setup and the cached session logging status.
+
+Makes no network calls: reads the AWS config and credentials files, the SSO token
+cache, hop's configuration and the last inventory. It checks session-manager-plugin
+(1.2.497.0 or later) and the AWS CLI, then flags expired tokens, keys left in plain
+text, profiles defined twice or needing MFA, and accounts that do not log sessions,
+each with the command that fixes it. Run "hop ls" first for an up-to-date session
+logging status.`,
+		Example: `  hop doctor
+  hop ls --refresh >/dev/null && hop doctor    with an up-to-date logging status`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			a, err := newApp(*f)
@@ -94,7 +102,8 @@ func (a *app) diagnose() []finding {
 		}
 	}
 	if _, err := exec.LookPath("aws"); err != nil {
-		add(finding{lvl: lvlInfo, title: `aws CLI not found: "hop login" cannot open SSO portals`})
+		add(finding{lvl: lvlInfo, title: "aws CLI not found: hop cannot open SSO portals (hop login, or when a token expires)",
+			fix: []string{"install the AWS CLI v2: https://docs.aws.amazon.com/cli/latest/userguide/getting-started-install.html"}})
 	}
 	// The shell runs the first hop on PATH, which may not be this binary.
 	if onPath, err := exec.LookPath("hop"); err == nil {
@@ -180,7 +189,7 @@ func (a *app) diagnose() []finding {
 	if len(refused) > 0 {
 		add(finding{lvl: lvlWarn, title: "keys rejected by AWS during the last inventory (revoked or expired)",
 			detail: wrap(refused, 6),
-			fix:    []string{"delete these sections from credentials, or list them under exclude: in ~/.config/hop/config.yaml"}})
+			fix:    []string{"delete these sections from credentials, or list them under exclude: in " + configFile()}})
 	}
 	if len(temp) > 0 {
 		add(finding{lvl: lvlWarn, title: "temporary keys pasted from the SSO portal: " + strings.Join(temp, ", "),
@@ -243,7 +252,7 @@ func (a *app) diagnose() []finding {
 		}
 		add(finding{lvl: lvlWarn, title: "SSO portal " + host + " is declared in two formats: two logins for one portal",
 			detail: []string{"legacy format: " + strings.Join(legacy, ", "), "sso_session format: " + session},
-			fix: []string{"in ~/.aws/config, for each legacy profile, replace",
+			fix: []string{"in " + files.ConfigPath + ", for each legacy profile, replace",
 				"sso_start_url and sso_region with: sso_session = " + session}})
 	}
 
@@ -279,7 +288,7 @@ func (a *app) diagnose() []finding {
 		add(finding{lvl: lvlCrit, title: "sessions NOT logged on these accounts",
 			detail: notLogged,
 			fix: []string{"configure SSM-SessionManagerRunShell (KMS-encrypted CloudWatch log group)",
-				"or set transcript: require in ~/.config/hop/config.yaml to refuse these sessions"}})
+				"or set transcript: require in " + configFile() + " to refuse these sessions"}})
 	}
 	if n := len(unknown) + nFailed; n > 0 {
 		detail := wrap(unknown, 4)

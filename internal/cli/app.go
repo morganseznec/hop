@@ -187,12 +187,20 @@ func (a *app) checkScope() error {
 		}
 		return fmt.Errorf("-p %s matches only profiles without credentials (%s)", strings.Join(a.f.profiles, ","), strings.Join(matched, ", "))
 	}
-	where := "hop's configuration"
-	if p, err := config.Path(); err == nil {
-		where = p
-	}
-	return fmt.Errorf("include and exclude in %s leave none of the %s with credentials in scope", where, plural(len(usable), "profile"))
+	return fmt.Errorf("include and exclude in %s leave none of the %s with credentials in scope", configFile(), plural(len(usable), "profile"))
 }
+
+// configFile is hop's configuration file as messages name it: its real path, which
+// follows XDG_CONFIG_HOME and is under %AppData% on Windows.
+func configFile() string {
+	if p, err := config.Path(); err == nil {
+		return p
+	}
+	return "hop's config.yaml"
+}
+
+// iamDocs is where the README lists the permissions hop needs.
+const iamDocs = "https://github.com/morganseznec/hop#iam-permissions"
 
 // emptyReason says which filter left nothing to show when the cache holds instances
 // for the profiles in scope: -r, -e, or the state when all is false (stopped
@@ -508,8 +516,21 @@ func (a *app) reportProblems() {
 		case inventory.ErrThrottled:
 			hint("AWS is rate limiting these calls: retry in a minute")
 			continue
+		case inventory.ErrRegion:
+			if len(a.f.regions) > 0 {
+				hint("enable the region on the account, or leave it out of -r")
+			} else {
+				hint("enable the region on the account, or remove it from extra_regions in %s", configFile())
+			}
+			continue
 		}
 		printCauses(other[k])
+		switch k {
+		case inventory.ErrDenied:
+			hint("the permissions hop needs: %s", iamDocs)
+		case inventory.ErrNetwork:
+			hint("check the network, VPN or proxy, then hop ls --refresh")
+		}
 	}
 }
 

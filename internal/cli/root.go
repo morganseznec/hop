@@ -77,22 +77,25 @@ func newRoot() *cobra.Command {
 	f := &filters{}
 	root := &cobra.Command{
 		Use:   "hop [instance...]",
-		Short: "Session Manager sessions on every instance, across all accounts and regions",
-		Long: `hop opens a shell through Session Manager (logged when the account has session
-logging), without SSH or instance credentials.
+		Short: "Open a Session Manager shell on any EC2 instance of any of your AWS accounts",
+		Long: `Open a Session Manager shell on any EC2 instance of any of your AWS accounts.
+
+hop opens the shell through Session Manager (logged when the account has session
+logging), without SSH keys, bastion or instance IDs to copy.
 
 With no argument, it opens a picker over the instances of every AWS profile on this
-machine, each in its own region. With words, it searches: "hop shop app", "hop tools",
-"hop i-0abc12..." or "hop 10.0.1.21". A single instance found by its exact name, ID
-or IP, or by whole words of its name, connects directly; a looser match asks first.`,
+machine, each queried in its own region plus its extra_regions ("hop scan" finds the
+others). With words, it searches: "hop shop app", "hop tools", "hop i-0abc12..." or
+"hop 10.0.1.21". A single instance found by its exact name, ID or IP, or by whole
+words of its name, connects directly; a looser match asks first.`,
 		Example: `  hop                         picker over the whole fleet
   hop shop tools              search by words
   hop -p 'shop-*' -e prod     limit to shop-* profiles, in prod
-  hop ls                      inventory of every account
+  hop ls                      list the instances of every account
   hop run tools uptime        one-off command with its output
   hop tunnel tools 3000       port forwarding
   hop login                   sign in again to expired SSO portals
-  hop doctor                  check this machine's AWS configuration`,
+  hop doctor                  check this machine's AWS setup`,
 		Version:           buildVersion(),
 		Args:              cobra.ArbitraryArgs,
 		SilenceUsage:      true,

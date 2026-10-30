@@ -2,6 +2,7 @@ package cli
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"os"
 	"regexp"
@@ -16,20 +17,24 @@ func newInit() *cobra.Command {
 	var alias string
 	cmd := &cobra.Command{
 		Use:   "init zsh [--alias NAME]",
-		Short: "zsh integration code: completion and an optional alias",
-		Long: `Put this in ~/.zshrc, after compinit:
+		Short: "Print the zsh integration (completion, optional alias)",
+		Long: `Print the zsh integration (completion, optional alias).
+
+Put this in ~/.zshrc, after compinit:
 
     eval "$(hop init zsh)"
 
 --alias NAME also makes NAME an alias for hop, and removes any zsh function of that
 name that would shadow it. For people used to typing another name:
 
-    eval "$(hop init zsh --alias ssm)"`,
+    eval "$(hop init zsh --alias ssm)"
+
+For bash, fish and PowerShell, see "hop completion --help".`,
 		Args:      cobra.ExactArgs(1),
 		ValidArgs: []string{"zsh"},
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if args[0] != "zsh" {
-				return fmt.Errorf("only zsh is supported")
+				return unsupportedShell(args[0])
 			}
 			if alias != "" && !aliasName.MatchString(alias) {
 				return fmt.Errorf("invalid alias name %q: use only letters, digits, _ and -", alias)
@@ -53,4 +58,14 @@ if (( $+functions[compdef] )); then
 	}
 	cmd.Flags().StringVar(&alias, "alias", "", "also define `NAME` as an alias for hop")
 	return cmd
+}
+
+// unsupportedShell points the other shells to hop completion, which covers them
+// without the alias.
+func unsupportedShell(shell string) error {
+	switch shell {
+	case "bash", "fish", "powershell":
+		return fmt.Errorf("only zsh is supported: for %s, see hop completion %s --help", shell, shell)
+	}
+	return errors.New("only zsh is supported: for bash, fish or PowerShell, see hop completion --help")
 }

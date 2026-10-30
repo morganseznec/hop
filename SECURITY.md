@@ -36,7 +36,11 @@ Out of scope: the security of AWS Session Manager itself, the
 - `~/.cache/hop/inventory.json`: instance names, IDs, private IPs, regions and the
   session logging settings of each account. No credentials.
 - `~/.local/state/hop/recents.json`: which instances you used, and when.
-- `~/.config/hop/config.yaml`: only what you write there.
+- `~/.config/hop/config.yaml`: only what you write there, and the regions that
+  `hop scan --write` adds.
+
+These are the Linux and macOS paths; see [docs/reference.md](docs/reference.md#file-locations)
+for Windows and the XDG variables.
 
 hop never keeps or copies the values of your AWS keys: it only notes that a profile
 has keys, and hands the profile name to the AWS SDK and to `session-manager-plugin`,
