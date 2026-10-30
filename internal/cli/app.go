@@ -371,7 +371,7 @@ var requestID = regexp.MustCompile(`https response error StatusCode: \d+, Reques
 // shortError puts a raw error on one line, without the request ID, and cuts it to
 // what a terminal line can show.
 func shortError(s string) string {
-	s = requestID.ReplaceAllString(strings.Join(strings.Fields(s), " "), "")
+	s = requestID.ReplaceAllString(strings.Join(strings.Fields(inventory.Redact(s)), " "), "")
 	if r := []rune(s); len(r) > 200 {
 		s = string(r[:197]) + "..."
 	}
@@ -593,7 +593,7 @@ func (a *app) awsConfig(ctx context.Context, in inventory.Instance) (aws.Config,
 	// Classify reads error messages: for any other profile, the raw error says more.
 	pt, ok := a.ssoPortal(in.Profile)
 	if !ok || inventory.Classify(err) != inventory.ErrSSOExpired {
-		return cfg, fmt.Errorf("credentials for profile %s: %w", in.Profile, err)
+		return cfg, fmt.Errorf("credentials for profile %s: %w", in.Profile, inventory.RedactError(err))
 	}
 	if !confirm(fmt.Sprintf("SSO token expired for %s. Sign in again now?", pt.Label()), true) {
 		return cfg, fmt.Errorf("SSO token expired for %s: hop login %s", pt.Label(), pt.Label())

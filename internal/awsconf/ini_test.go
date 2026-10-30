@@ -43,6 +43,31 @@ aws_access_key_id = AKIA1
 			commented: 3,
 		},
 		{
+			name: "a comment after a section header does not merge the section into the previous one",
+			in: `[profile acme-dev]
+sso_account_id = 111111111111
+region = eu-west-1
+[profile acme-prod] # production
+sso_account_id = 222222222222
+region = eu-west-3
+[profile acme-test]; tests
+region = us-east-1
+`,
+			want: []section{
+				{name: "profile acme-dev", keys: map[string]string{"sso_account_id": "111111111111", "region": "eu-west-1"}},
+				{name: "profile acme-prod", keys: map[string]string{"sso_account_id": "222222222222", "region": "eu-west-3"}},
+				{name: "profile acme-test", keys: map[string]string{"region": "us-east-1"}},
+			},
+		},
+		{
+			name: "secret values are recorded as present, never kept",
+			in:   "[acme]\naws_access_key_id = AKIA1\naws_secret_access_key = s3cr3t\naws_session_token = t0k3n\n[empty]\naws_secret_access_key =\n",
+			want: []section{
+				{name: "acme", keys: map[string]string{"aws_access_key_id": "AKIA1", "aws_secret_access_key": present, "aws_session_token": present}},
+				{name: "empty", keys: map[string]string{"aws_secret_access_key": ""}},
+			},
+		},
+		{
 			name: "whitespace inside the section header is normalized",
 			in:   "[  profile    acme-prod  ]\nregion = eu-west-1\n",
 			want: []section{{name: "profile acme-prod", keys: map[string]string{"region": "eu-west-1"}}},

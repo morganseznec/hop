@@ -2,7 +2,6 @@ package session
 
 import (
 	"context"
-	"crypto/rand"
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
@@ -238,8 +237,7 @@ func Push(ctx context.Context, cfg aws.Config, instanceID, local, remote string)
 	sum := sha256.Sum256(b)
 	want := hex.EncodeToString(sum[:])
 
-	tmp := "/tmp/.hop-push." + rand.Text()
-	out, err := Run(ctx, cfg, instanceID, pushScript(b, tmp, remote), 2*time.Minute)
+	out, err := Run(ctx, cfg, instanceID, pushScript(b, remote), 2*time.Minute)
 	if err != nil {
 		return nil, err
 	}
@@ -257,27 +255,30 @@ func Push(ctx context.Context, cfg aws.Config, instanceID, local, remote string)
 }
 
 // pushScript returns the shell commands that write data to dst and print its SHA-256.
-// The base64 text goes, in chunks, to the private temporary file tmp.b64, and is decoded
-// to tmp, which is then copied over dst. Writing dst in place keeps the owner and mode
-// of an existing file, and a new file gets the instance's default umask; the trap
-// removes the temporary files whether the script succeeds or not.
-func pushScript(data []byte, tmp, dst string) []string {
+// The base64 text goes, in chunks, to a file in a private temporary directory, and is
+// decoded next to it, then copied over dst. Writing dst in place keeps the owner and
+// mode of an existing file, and a new file gets the instance's default umask; the trap
+// removes the directory whether the script succeeds or not.
+func pushScript(data []byte, dst string) []string {
 	enc := base64.StdEncoding.EncodeToString(data)
 	cmds := []string{
 		"set -e",
-		"tmp=" + ShellQuote(tmp),
 		"dst=" + ShellQuote(dst),
-		`trap 'rm -f "$tmp.b64" "$tmp"' EXIT`,
+		// mktemp creates the directory 0700 under a random name: another local user can
+		// neither guess the files inside, nor create, read or swap them before root
+		// writes to them, as a predictable name in /tmp would allow.
+		`d=$(umask 077 && mktemp -d "${TMPDIR:-/tmp}/.hop-push.XXXXXXXX")`,
+		`trap 'rm -rf "$d"' EXIT`,
 		// Created up front, so that an empty file has a temporary file too.
-		`(umask 077 && : > "$tmp.b64" && : > "$tmp")`,
+		`: > "$d/data.b64"`,
 	}
 	for i := 0; i < len(enc); i += pushChunk {
-		cmds = append(cmds, fmt.Sprintf(`printf '%%s' '%s' >> "$tmp.b64"`, enc[i:min(i+pushChunk, len(enc))]))
+		cmds = append(cmds, fmt.Sprintf(`printf '%%s' '%s' >> "$d/data.b64"`, enc[i:min(i+pushChunk, len(enc))]))
 	}
 	return append(cmds,
 		// The macOS base64 reads only stdin or -i.
-		`base64 -d < "$tmp.b64" > "$tmp"`,
-		`cat "$tmp" > "$dst"`,
+		`base64 -d < "$d/data.b64" > "$d/data"`,
+		`cat "$d/data" > "$dst"`,
 		// Hashing stdin keeps the file name out of the output, which GNU sha256sum escapes
 		// when it contains a backslash or a newline. sha256sum on Linux, sha256 on FreeBSD
 		// (pfSense), shasum on older macOS.

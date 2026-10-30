@@ -7,7 +7,31 @@ on:
 permissions: {}
 
 jobs:
+  # Tests run here, with a read-only token: code they execute (dependencies included)
+  # never sees the permissions that sign and publish the release.
+  verify:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      # Only what reached main, through a pull request and its required checks, is
+      # released: a tag on any other commit stops here.
+      - name: Tagged commit is on main
+        run: git merge-base --is-ancestor "$GITHUB_SHA" origin/main
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: "1.27.x"
+          check-latest: true
+          cache: false
+      - name: go test
+        run: go test ./...
+
   goreleaser:
+    needs: verify
     runs-on: ubuntu-latest
     permissions:
       contents: write # create the release
@@ -25,8 +49,6 @@ jobs:
           go-version: "1.27.x"
           check-latest: true
           cache: false
-      - name: go test
-        run: go test ./...
       - uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
       - uses: goreleaser/goreleaser-action@a4f02ab5355a589de60d917a659ce617ed19b3de # v7.3.0
         with:

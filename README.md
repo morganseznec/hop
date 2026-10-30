@@ -95,7 +95,7 @@ go install github.com/morganseznec/hop/cmd/hop@latest
 ### Docker
 
 ```bash
-docker run --rm -it --user "$(id -u):$(id -g)" -v ~/.aws:/home/hop/.aws \
+docker run --rm -it --user "$(id -u):$(id -g)" -v ~/.aws:/home/hop/.aws:ro \
   ghcr.io/morganseznec/hop ls
 ```
 
@@ -103,19 +103,26 @@ The image (linux/amd64 and linux/arm64) holds hop and a `session-manager-plugin`
 built from source, on Alpine, as a non-root user, without a package manager.
 
 - `--user` runs hop as you, so it can read your `~/.aws` files (they are `0600`).
-- Log in to SSO on the host. The mount is writable so that the SDK can save a
-  refreshed token; add `:ro` if you prefer to refresh on the host only.
+- `~/.aws` is mounted read-only: log in to SSO on the host. Drop `:ro` only if you
+  want the container to save refreshed SSO tokens there.
 - It also runs with `--read-only --tmpfs /tmp --cap-drop ALL --security-opt no-new-privileges`.
 - Port forwarding needs `--network host` (Linux only), since the plugin listens on the
   container's localhost.
 
 ### Verify what you downloaded
 
-Release archives and images are built by GitHub Actions, with signed provenance:
+Release archives and images are built by GitHub Actions, with signed provenance. Check
+the exact workflow and tag that built them, not just the repository: any workflow of
+the repository could sign something.
 
 ```bash
-gh attestation verify hop_<version>_linux_amd64.tar.gz --repo morganseznec/hop
-gh attestation verify oci://ghcr.io/morganseznec/hop:latest --repo morganseznec/hop
+VERSION=0.1.2
+gh attestation verify hop_${VERSION}_linux_amd64.tar.gz --repo morganseznec/hop \
+  --signer-workflow morganseznec/hop/.github/workflows/release.yml \
+  --source-ref refs/tags/v${VERSION}
+gh attestation verify oci://ghcr.io/morganseznec/hop:${VERSION} --repo morganseznec/hop \
+  --signer-workflow morganseznec/hop/.github/workflows/docker.yml \
+  --source-ref refs/tags/v${VERSION}
 ```
 
 From v0.1.2, each release also carries a Sigstore signature of `checksums.txt` and a
@@ -123,18 +130,20 @@ SLSA level 3 provenance (`hop.intoto.jsonl`):
 
 ```bash
 cosign verify-blob checksums.txt --bundle checksums.txt.sigstore.json \
-  --certificate-identity-regexp '^https://github.com/morganseznec/hop/' \
+  --certificate-identity "https://github.com/morganseznec/hop/.github/workflows/release.yml@refs/tags/v${VERSION}" \
   --certificate-oidc-issuer https://token.actions.githubusercontent.com
 sha256sum --ignore-missing -c checksums.txt
-slsa-verifier verify-artifact hop_<version>_linux_amd64.tar.gz \
-  --provenance-path hop.intoto.jsonl --source-uri github.com/morganseznec/hop
+slsa-verifier verify-artifact hop_${VERSION}_linux_amd64.tar.gz \
+  --provenance-path hop.intoto.jsonl \
+  --source-uri github.com/morganseznec/hop --source-tag v${VERSION}
 ```
 
-Images are also signed with Sigstore:
+Images are also signed with Sigstore. Once verified, run the image by the digest that
+`cosign` prints (`ghcr.io/morganseznec/hop@sha256:...`) rather than by tag:
 
 ```bash
-cosign verify ghcr.io/morganseznec/hop:latest \
-  --certificate-identity-regexp '^https://github.com/morganseznec/hop/' \
+cosign verify ghcr.io/morganseznec/hop:${VERSION} \
+  --certificate-identity "https://github.com/morganseznec/hop/.github/workflows/docker.yml@refs/tags/v${VERSION}" \
   --certificate-oidc-issuer https://token.actions.githubusercontent.com
 ```
 
@@ -268,6 +277,7 @@ hop also writes `~/.cache/hop/inventory.json` (instances, no credentials) and
 | `ssm:GetDocument` | session logging check |
 | `ssm:StartSession`, `ssm:TerminateSession` | shell, tunnel |
 | `ssm:SendCommand`, `ssm:GetCommandInvocation` | `hop run`, `hop push` |
+| `ssm:CancelCommand` | `hop run`, `hop push` (cancels a command the instance never picked up) |
 | `ec2:DescribeRegions` | `hop scan` |
 
 ## Contributing

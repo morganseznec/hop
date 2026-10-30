@@ -557,8 +557,8 @@ func posixTools(t *testing.T) {
 }
 
 // remoteShell plays the instance: it runs the commands received by SendCommand with
-// the local sh, as AWS-RunShellScript would, with the temporary files of Push moved
-// from /tmp to a temporary folder.
+// the local sh, as AWS-RunShellScript would, with TMPDIR pointing to a temporary folder
+// so that the files Push leaves behind can be checked.
 func remoteShell(t *testing.T) (*fakeSSM, aws.Config, string) {
 	t.Helper()
 	posixTools(t)
@@ -568,13 +568,7 @@ func remoteShell(t *testing.T) (*fakeSSM, aws.Config, string) {
 	fake, cfg := newFake(t, func(op string, req map[string]any) (int, string) {
 		switch op {
 		case "SendCommand":
-			var script []string
-			for _, c := range commandsOf(req) {
-				if name, ok := strings.CutPrefix(c, "tmp='/tmp/"); ok {
-					c = "tmp=" + ShellQuote(filepath.Join(remoteTmp, strings.TrimSuffix(name, "'")))
-				}
-				script = append(script, c)
-			}
+			script := append([]string{"export TMPDIR=" + ShellQuote(remoteTmp)}, commandsOf(req)...)
 			stdout, stderr, code := runScript(script)
 			status := "Success"
 			if code != 0 {
@@ -687,25 +681,30 @@ func TestPushWithBSDBase64(t *testing.T) {
 
 func TestPushScript(t *testing.T) {
 	data := []byte("listen 8080\n")
-	cmds := pushScript(data, "/tmp/.hop-push.TEST", "/opt/acme/app.conf")
+	cmds := pushScript(data, "/opt/acme/app.conf")
 	if cmds[0] != "set -e" {
 		t.Errorf("the script must stop on the first error: %q", cmds[0])
 	}
+	mkdir := slices.IndexFunc(cmds, func(c string) bool { return strings.Contains(c, "mktemp -d") })
 	trap := slices.IndexFunc(cmds, func(c string) bool { return strings.HasPrefix(c, "trap ") })
-	create := slices.IndexFunc(cmds, func(c string) bool { return strings.Contains(c, "umask 077") })
-	if trap < 0 || create < 0 || trap > create {
-		t.Errorf("the trap must be set before the temporary files exist: %q", cmds)
+	create := slices.IndexFunc(cmds, func(c string) bool { return strings.HasPrefix(c, `: > "$d/`) })
+	if mkdir < 0 || trap < 0 || create < 0 || mkdir > trap || trap > create {
+		t.Errorf("private directory, then the trap, then the files: %q", cmds)
 	}
 	for _, c := range cmds {
 		// umask 077 in the script itself would make a new destination root-only.
-		if strings.Contains(c, "umask") && !strings.HasPrefix(c, "(umask 077 && ") {
+		if strings.Contains(c, "umask") && !strings.HasPrefix(c, "d=$(umask 077 && mktemp -d ") {
 			t.Errorf("umask outside a subshell: %q", c)
+		}
+		// A predictable name in /tmp lets another local user swap the file.
+		if strings.Contains(c, "/tmp/") && !strings.Contains(c, "mktemp") {
+			t.Errorf("fixed path in /tmp: %q", c)
 		}
 		if strings.Contains(c, "/opt/acme") && c != "dst='/opt/acme/app.conf'" {
 			t.Errorf("the destination must go through $dst: %q", c)
 		}
 	}
-	if again := pushScript(data, "/tmp/.hop-push.TEST", "/opt/acme/app.conf"); !slices.Equal(again, cmds) {
+	if again := pushScript(data, "/opt/acme/app.conf"); !slices.Equal(again, cmds) {
 		t.Error("pushScript is not deterministic")
 	}
 }
@@ -721,11 +720,11 @@ func TestPushScriptWithRealShell(t *testing.T) {
 	run := func(t *testing.T, data []byte, dst string) (string, string, int, string) {
 		t.Helper()
 		tmpDir := t.TempDir()
-		cmds := pushScript(data, filepath.Join(tmpDir, ".hop-push.TEST"), dst)
-		create := slices.IndexFunc(cmds, func(c string) bool { return strings.Contains(c, "umask 077") })
-		probe := `for f in "$tmp.b64" "$tmp"; do [ "$(ls -l "$f" | cut -c1-10)" = "-rw-------" ] || { echo "$f is not private" >&2; exit 9; }; done`
+		cmds := pushScript(data, dst)
+		create := slices.IndexFunc(cmds, func(c string) bool { return strings.HasPrefix(c, `: > "$d/`) })
+		probe := `[ "$(ls -ld "$d" | cut -c1-10)" = "drwx------" ] || { echo "$d is not private" >&2; exit 9; }`
 		cmds = slices.Insert(cmds, create+1, probe)
-		stdout, stderr, code := runScript(append([]string{"umask 022"}, cmds...))
+		stdout, stderr, code := runScript(append([]string{"umask 022", "export TMPDIR=" + ShellQuote(tmpDir)}, cmds...))
 		left, _ := filepath.Glob(filepath.Join(tmpDir, ".hop-push.*"))
 		if len(left) != 0 {
 			t.Errorf("temporary files left behind: %v", left)
