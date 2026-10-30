@@ -4,7 +4,6 @@
 [![Docker](https://github.com/morganseznec/hop/actions/workflows/docker.yml/badge.svg)](https://github.com/morganseznec/hop/actions/workflows/docker.yml)
 [![CodeQL](https://github.com/morganseznec/hop/actions/workflows/codeql.yml/badge.svg)](https://github.com/morganseznec/hop/actions/workflows/codeql.yml)
 [![OpenSSF Scorecard](https://api.scorecard.dev/projects/github.com/morganseznec/hop/badge)](https://scorecard.dev/viewer/?uri=github.com/morganseznec/hop)
-[![Go Report Card](https://goreportcard.com/badge/github.com/morganseznec/hop)](https://goreportcard.com/report/github.com/morganseznec/hop)
 [![Go Reference](https://pkg.go.dev/badge/github.com/morganseznec/hop.svg)](https://pkg.go.dev/github.com/morganseznec/hop)
 [![Release](https://img.shields.io/github/v/release/morganseznec/hop?sort=semver)](https://github.com/morganseznec/hop/releases)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
