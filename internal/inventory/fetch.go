@@ -41,7 +41,7 @@ func Fetch(ctx context.Context, p Pair) *Target {
 	profile, region := p.Profile, p.Region
 	t := &Target{Profile: profile, Region: region}
 	fail := func(err error) *Target {
-		t.Err = err.Error()
+		t.Err = Redact(err.Error())
 		t.ErrKind = Classify(err)
 		t.ErrAt = time.Now()
 		return t
@@ -132,6 +132,10 @@ func describeEC2(ctx context.Context, c *ec2.Client, profile, region string) ([]
 // instance could otherwise send escape sequences (or line breaks) to the terminal of
 // whoever lists it, and rewrite hop's output. Bidirectional overrides go too, since
 // they reorder what is displayed.
+// Clean drops control and bidi characters from text read from AWS (tags, names),
+// which ends up in the terminal.
+func Clean(s string) string { return clean(s) }
+
 func clean(s string) string {
 	return strings.Map(func(r rune) rune {
 		if unicode.IsControl(r) || unicode.Is(unicode.Bidi_Control, r) {
@@ -195,7 +199,7 @@ func transcript(ctx context.Context, c *ssm.Client) Transcript {
 			// logging.
 			return Transcript{Checked: true}
 		}
-		return Transcript{Err: err.Error()}
+		return Transcript{Err: Redact(err.Error())}
 	}
 	return ParseSessionPrefs(aws.ToString(out.Content))
 }

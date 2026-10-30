@@ -44,7 +44,7 @@ func Execute() int {
 	if errors.Is(err, errAborted) || errors.Is(err, context.Canceled) {
 		return 130
 	}
-	fmt.Fprintln(os.Stderr, paint(stderrTTY, cRed, "hop: "+err.Error()))
+	fmt.Fprintln(os.Stderr, paint(stderrTTY, cRed, "hop: "+inventory.Redact(err.Error())))
 	return 1
 }
 

@@ -160,8 +160,12 @@ func (a *app) scan(ctx context.Context) ([]scanHit, []string) {
 					defer cancel()
 					rc := cfg.Copy()
 					rc.Region = r
-					names, _ := instanceNamesIn(rctx, rc)
+					names, err := instanceNamesIn(rctx, rc)
 					mu.Lock()
+					// A region that could not be read is not a region without instances.
+					if err != nil {
+						failed = append(failed, fmt.Sprintf("%s %s not scanned: %s", p.Name, r, inventory.Classify(err).Explain()))
+					}
 					if len(names) > 0 {
 						hits = append(hits, scanHit{p.Name, r, names})
 					}
@@ -210,8 +214,9 @@ func instanceNamesIn(ctx context.Context, cfg aws.Config) ([]string, error) {
 		for _, in := range r.Instances {
 			name := aws.ToString(in.InstanceId)
 			for _, t := range in.Tags {
-				if aws.ToString(t.Key) == "Name" && aws.ToString(t.Value) != "" {
-					name = aws.ToString(t.Value)
+				// Tags are set by anyone allowed to tag: never print them raw.
+				if v := inventory.Clean(aws.ToString(t.Value)); aws.ToString(t.Key) == "Name" && v != "" {
+					name = v
 				}
 			}
 			names = append(names, name)

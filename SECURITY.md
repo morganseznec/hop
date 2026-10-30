@@ -38,5 +38,7 @@ Out of scope: the security of AWS Session Manager itself, the
 - `~/.local/state/hop/recents.json`: which instances you used, and when.
 - `~/.config/hop/config.yaml`: only what you write there.
 
-hop never reads or copies the values of your AWS keys. It hands the profile name to
-the AWS SDK and to `session-manager-plugin`, like the AWS CLI does.
+hop never keeps or copies the values of your AWS keys: it only notes that a profile
+has keys, and hands the profile name to the AWS SDK and to `session-manager-plugin`,
+like the AWS CLI does. Error messages are scrubbed of access keys, secret keys and
+session tokens before they are printed or cached.
