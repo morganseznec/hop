@@ -33,6 +33,10 @@ jobs:
   goreleaser:
     needs: verify
     runs-on: ubuntu-latest
+    # The secret HOMEBREW_TAP_GITHUB_TOKEN belongs to the "release" environment, not to
+    # the repository secrets: only a job that declares this environment and runs on a v*
+    # tag (the environment's deployment rule) can read it.
+    environment: release
     permissions:
       contents: write # create the release
       id-token: write # sign the checksums and the provenance attestation
