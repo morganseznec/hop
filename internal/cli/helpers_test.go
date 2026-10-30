@@ -63,6 +63,26 @@ func isolate(t *testing.T) string {
 	return home
 }
 
+// cachePath returns the cache file in the isolated home.
+func cachePath(t *testing.T) string {
+	t.Helper()
+	p, err := inventory.Path()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return p
+}
+
+// configPath returns hop's configuration file in the isolated home.
+func configPath(t *testing.T) string {
+	t.Helper()
+	p, err := config.Path()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return p
+}
+
 // terminal sets the terminal flags and the color switch for the duration of a test.
 func terminal(t *testing.T, tty, colorOff bool) {
 	t.Helper()

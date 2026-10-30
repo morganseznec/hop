@@ -346,3 +346,13 @@ func TestWrap(t *testing.T) {
 		}
 	}
 }
+
+func TestDiagnoseMFA(t *testing.T) {
+	a := doctorApp(t, "")
+	a.files = loadFiles(t, mfaConfig, fleetCredentials)
+	x, ok := findingByTitle(a.diagnose(), "2 profiles need an MFA code (mfa_serial), which hop does not prompt for yet")
+	if !ok || x.lvl != lvlWarn || !strings.Contains(strings.Join(x.detail, "\n"), "billing-mfa, billing-mfa-2") ||
+		!strings.Contains(strings.Join(x.fix, "\n"), "aws-vault") {
+		t.Errorf("finding %+v", x)
+	}
+}

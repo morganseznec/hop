@@ -2,6 +2,7 @@ package cli
 
 import (
 	"encoding/json"
+	"fmt"
 	"net"
 	"os"
 	"path/filepath"
@@ -80,8 +81,26 @@ func TestVersionFlag(t *testing.T) {
 	if err := root.Execute(); err != nil {
 		t.Fatal(err)
 	}
-	if strings.TrimSpace(out.String()) != "hop version "+version {
+	if strings.TrimSpace(out.String()) != "hop version "+buildVersion() {
 		t.Errorf("%q", out.String())
+	}
+}
+
+func TestVersionOf(t *testing.T) {
+	cases := []struct {
+		linked, module, want string
+	}{
+		{"1.4.0", "v1.4.0", "1.4.0"}, // a release build: the linked version
+		{"1.4.0", "", "1.4.0"},
+		{"dev", "v1.4.0", "1.4.0"}, // go install ...@v1.4.0 or @latest
+		{"dev", "v0.0.0-20261030091500-abcdef123456", "0.0.0-20261030091500-abcdef123456"},
+		{"dev", "(devel)", "dev"}, // go build in a clone
+		{"dev", "", "dev"},
+	}
+	for _, c := range cases {
+		if got := versionOf(c.linked, c.module); got != c.want {
+			t.Errorf("versionOf(%q, %q) = %q, want %q", c.linked, c.module, got, c.want)
+		}
 	}
 }
 
@@ -223,15 +242,15 @@ func TestDoctorCommand(t *testing.T) {
 func TestRefreshCommandWithFreshCache(t *testing.T) {
 	fleetEnv(t)
 	terminal(t, false, false)
-	before, _ := os.ReadFile(inventory.Path())
+	before, _ := os.ReadFile(cachePath(t))
 	if _, _, err := runHop(t, "__refresh"); err != nil {
 		t.Fatal(err)
 	}
-	after, _ := os.ReadFile(inventory.Path())
+	after, _ := os.ReadFile(cachePath(t))
 	if string(before) != string(after) {
 		t.Error("a fresh cache was rewritten")
 	}
-	if _, err := os.Stat(filepath.Join(inventory.CacheDir(), "refresh.lock")); !os.IsNotExist(err) {
+	if _, err := os.Stat(filepath.Join(filepath.Dir(cachePath(t)), "refresh.lock")); !os.IsNotExist(err) {
 		t.Errorf("lock left behind: %v", err)
 	}
 }
@@ -309,7 +328,7 @@ func TestCompletion(t *testing.T) {
 
 func TestCompletionWithBrokenConfig(t *testing.T) {
 	fleetEnv(t)
-	os.WriteFile(config.Path(), []byte("transcript: always\n"), 0o600)
+	os.WriteFile(configPath(t), []byte("transcript: always\n"), 0o600)
 	if got, _ := completeQuery(&filters{})(&cobra.Command{}, nil, ""); got != nil {
 		t.Errorf("an invalid config must give no completion, not a crash: %v", got)
 	}
@@ -435,5 +454,179 @@ func TestLocalPort(t *testing.T) {
 	}
 	if _, err := localPort("443", "", none); err == nil || err.Error() != "no free local port found for 443: give one as the third argument" {
 		t.Errorf("default, nothing free: %v", err)
+	}
+}
+
+func TestLsJSONReportsStalePairs(t *testing.T) {
+	fleetEnv(t)
+	terminal(t, false, false)
+	// acme-prod failed a few seconds ago (no SSO token): it is not queried again, and
+	// its last known instances are still listed.
+	inv := inventory.Load()
+	prod := inv.Targets[inventory.TargetKey("acme-prod", "eu-west-1")]
+	prod.FetchedAt = time.Now().Add(-26 * time.Hour)
+	prod.Err, prod.ErrKind, prod.ErrAt = "failed to refresh cached credentials, cached SSO token is expired", inventory.ErrSSOExpired, time.Now()
+	rewriteCache(t, inv)
+
+	out, stderr, err := runHop(t, "ls", "--json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(stderr, "SSO token expired for acme-sso: acme-prod not queried") || !strings.Contains(stderr, "hop login acme-sso") {
+		t.Errorf("the failing pair must be reported on stderr:\n%s", stderr)
+	}
+	var rows []map[string]any
+	if err := json.Unmarshal([]byte(out), &rows); err != nil {
+		t.Fatalf("%v\n%s", err, out)
+	}
+	byID := map[string]map[string]any{}
+	for _, r := range rows {
+		byID[r["id"].(string)] = r
+	}
+	tools, etl := byID["i-01"], byID["i-03"]
+	if tools == nil || etl == nil {
+		t.Fatalf("rows %v", rows)
+	}
+	if tools["stale"] != true || !strings.HasPrefix(fmt.Sprint(tools["error"]), "SSO token expired: failed to refresh cached credentials") {
+		t.Errorf("row of the failing pair: %v", tools)
+	}
+	at, err := time.Parse(time.RFC3339, fmt.Sprint(tools["fetched_at"]))
+	if err != nil || time.Since(at) < 25*time.Hour || !strings.HasSuffix(fmt.Sprint(tools["fetched_at"]), "Z") {
+		t.Errorf("fetched_at %v: %v", tools["fetched_at"], err)
+	}
+	if _, ok := etl["error"]; ok || etl["stale"] != false {
+		t.Errorf("row of a fresh pair: %v", etl)
+	}
+	if at, err := time.Parse(time.RFC3339, fmt.Sprint(etl["fetched_at"])); err != nil || time.Since(at) > time.Minute {
+		t.Errorf("fetched_at %v: %v", etl["fetched_at"], err)
+	}
+	// The existing fields keep their names.
+	for _, k := range []string{"id", "name", "profile", "region", "state", "env", "agent", "transcript"} {
+		if _, ok := tools[k]; !ok {
+			t.Errorf("field %s missing: %v", k, tools)
+		}
+	}
+}
+
+func TestEnvSynonyms(t *testing.T) {
+	fleetEnv(t)
+	terminal(t, false, false)
+	for _, env := range []string{"test", "staging", "DEV", "qa", "uat"} {
+		out, _, err := runHop(t, "ls", "--json", "-e", env)
+		if err != nil {
+			t.Fatalf("-e %s: %v", env, err)
+		}
+		var rows []struct {
+			ID string `json:"id"`
+		}
+		json.Unmarshal([]byte(out), &rows)
+		if len(rows) != 1 || rows[0].ID != "i-05" {
+			t.Errorf("-e %s: %s", env, out)
+		}
+	}
+	out, _, err := runHop(t, "ls", "--json", "-e", "production")
+	if err != nil || !strings.Contains(out, `"i-01"`) || strings.Contains(out, `"i-05"`) {
+		t.Errorf("-e production: %v\n%s", err, out)
+	}
+
+	_, _, err = runHop(t, "ls", "-e", "sandbox")
+	if err == nil {
+		t.Fatal("-e sandbox: want an error")
+	}
+	for _, want := range []string{`unknown environment "sandbox"`, "use prod (or p, prd, production) or test (or ", "staging", "dev", "uat"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("error %q does not mention %q", err, want)
+		}
+	}
+}
+
+func TestCheckRegion(t *testing.T) {
+	valid := append([]string{"us-gov-west-1", "us-gov-east-1", "cn-north-1", "cn-northwest-1", "us-iso-east-1",
+		"us-isob-east-1", "us-isof-south-1", "eu-isoe-west-1", "eusc-de-east-1"}, knownRegions...)
+	for _, r := range valid {
+		if err := checkRegion(r); err != nil {
+			t.Errorf("%s: %v", r, err)
+		}
+	}
+	cases := map[string]string{
+		"eu-west-1a": "availability zone, its region is eu-west-1",
+		"EU-WEST-1":  "lower case (eu-west-1)",
+		"eu-west1":   "expected a region name",
+		"ireland":    "expected a region name",
+		"eu_west_1":  "expected a region name",
+		"":           "expected a region name",
+		"eu-west-1 ": "expected a region name",
+	}
+	for r, want := range cases {
+		if err := checkRegion(r); err == nil || !strings.Contains(err.Error(), want) {
+			t.Errorf("%q: %v, want %q", r, err, want)
+		}
+	}
+
+	// Refused before anything is read or queried.
+	isolate(t)
+	terminal(t, false, false)
+	_, _, err := runHop(t, "ls", "-r", "eu-west-1,eu-west-3b")
+	if err == nil || !strings.Contains(err.Error(), `invalid region "eu-west-3b"`) {
+		t.Errorf("hop ls -r eu-west-3b: %v", err)
+	}
+}
+
+func TestCompleteRecentRegions(t *testing.T) {
+	got, _ := completeRegions(nil, nil, "")
+	for _, r := range []string{"ap-east-1", "ap-east-2", "ap-south-2", "ap-southeast-3", "ap-southeast-4", "ap-southeast-5",
+		"ap-southeast-6", "ap-southeast-7", "ca-west-1", "mx-central-1", "il-central-1", "me-central-1"} {
+		if !slices.Contains(got, r) {
+			t.Errorf("%s missing", r)
+		}
+	}
+}
+
+func TestFirstRun(t *testing.T) {
+	cases := []struct {
+		name          string
+		config, creds string // empty: no file
+	}{
+		{"no AWS files", "", ""},
+		{"a default with only a region", "[default]\nregion = eu-west-1\n", ""},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			isolate(t)
+			t.Setenv("PATH", t.TempDir()) // doctor runs the tools it finds
+			terminal(t, false, false)
+			if c.config != "" {
+				os.WriteFile(awsconf.ConfigPath(), []byte(c.config), 0o600)
+			}
+			want := fmt.Sprintf(`no AWS profile with credentials in %s or %s: create one with "aws configure sso", then run hop ls`,
+				awsconf.ConfigPath(), awsconf.CredentialsPath())
+			for _, args := range [][]string{{"ls"}, {"ls", "--json"}, {"run", "tools", "uptime"}, {"ls", "-p", "acme-prod"}} {
+				_, _, err := runHop(t, args...)
+				if err == nil || err.Error() != want {
+					t.Errorf("%v: %v\nwant %s", args, err, want)
+				}
+			}
+			out, _, _ := runHop(t, "doctor")
+			if !strings.Contains(out, "no AWS profile with credentials") || !strings.Contains(out, "aws configure sso") {
+				t.Errorf("doctor:\n%s", out)
+			}
+		})
+	}
+}
+
+func TestWithoutHome(t *testing.T) {
+	isolate(t)
+	terminal(t, false, false)
+	for _, k := range []string{"HOME", "USERPROFILE", "home", "XDG_CONFIG_HOME", "XDG_CACHE_HOME", "XDG_STATE_HOME", "APPDATA", "LOCALAPPDATA"} {
+		t.Setenv(k, "")
+	}
+	wd := t.TempDir()
+	t.Chdir(wd)
+	_, _, err := runHop(t, "ls")
+	if err == nil || !strings.Contains(err.Error(), "home directory is not set") {
+		t.Errorf("error %v", err)
+	}
+	if left, _ := os.ReadDir(wd); len(left) != 0 {
+		t.Errorf("written relative to the working directory: %v", left)
 	}
 }

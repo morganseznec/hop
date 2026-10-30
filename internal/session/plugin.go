@@ -81,10 +81,18 @@ func Start(ctx context.Context, cfg aws.Config, req Request) error {
 	if err := cmd.Start(); err != nil {
 		// Without the plugin, the session opened on the agent side would stay active
 		// until it expires: terminate it.
-		_, _ = client.TerminateSession(context.Background(), &ssm.TerminateSessionInput{SessionId: out.SessionId})
+		terminate(ctx, client, aws.ToString(out.SessionId))
 		return err
 	}
 	return cmd.Wait()
+}
+
+// terminate closes a session, best effort, with a context of its own (the caller's may
+// already be canceled) and bounded like the cancellation of a command.
+func terminate(ctx context.Context, client *ssm.Client, sessionID string) {
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), cancelTimeout)
+	defer cancel()
+	_, _ = client.TerminateSession(ctx, &ssm.TerminateSessionInput{SessionId: aws.String(sessionID)})
 }
 
 // pluginEndpoint returns the SSM endpoint the SDK resolves for hop's own calls, so that

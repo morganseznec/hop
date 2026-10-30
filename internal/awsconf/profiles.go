@@ -59,8 +59,11 @@ type Profile struct {
 	SSOAccountID string
 	SSORoleName  string
 
-	RoleARN              string
-	SourceProfile        string
+	RoleARN       string
+	SourceProfile string
+	// MFASerial makes the assumed role need an MFA code, typed when the credentials are
+	// loaded (see NeedsMFA).
+	MFASerial            string
 	CredentialSource     string // Environment, Ec2InstanceMetadata, EcsContainer
 	WebIdentityTokenFile string
 	CredentialProcess    string
@@ -86,6 +89,10 @@ func (p *Profile) PreferSSO() bool { return p.HasSSO && p.HasKeys }
 
 // Usable reports whether the profile carries credentials. Others are silently skipped.
 func (p *Profile) Usable() bool { return p.Kind != KindNone }
+
+// NeedsMFA reports whether the profile assumes a role with mfa_serial: the SDK then
+// needs an MFA code to load its credentials.
+func (p *Profile) NeedsMFA() bool { return p.Kind == KindAssumeRole && p.MFASerial != "" }
 
 // PortalKey identifies the SSO token the profile depends on: the session name for the
 // sso_session format, the start URL for the legacy format. It is also the key of the
@@ -223,6 +230,7 @@ func applyConfig(p *Profile, k map[string]string) {
 	p.SSORoleName = k["sso_role_name"]
 	p.RoleARN = k["role_arn"]
 	p.SourceProfile = k["source_profile"]
+	p.MFASerial = k["mfa_serial"]
 	p.CredentialSource = k["credential_source"]
 	p.WebIdentityTokenFile = k["web_identity_token_file"]
 	p.CredentialProcess = k["credential_process"]
@@ -267,6 +275,19 @@ func (f *Files) Profile(name string) *Profile {
 		if p.Name == name {
 			return p
 		}
+	}
+	return nil
+}
+
+// MFAProfile returns the profile, along the source_profile chain of name, that assumes
+// a role with mfa_serial, or nil when loading name needs no MFA code.
+func (f *Files) MFAProfile(name string) *Profile {
+	seen := map[string]bool{}
+	for p := f.Profile(name); p != nil && p.Kind == KindAssumeRole && !seen[p.Name]; p = f.Profile(p.SourceProfile) {
+		if p.NeedsMFA() {
+			return p
+		}
+		seen[p.Name] = true
 	}
 	return nil
 }

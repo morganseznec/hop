@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/aws/aws-sdk-go-v2/aws/retry"
+	awsconfig "github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/credentials/ssocreds"
 	"github.com/aws/smithy-go"
 	smithyhttp "github.com/aws/smithy-go/transport/http"
@@ -23,6 +24,7 @@ const (
 	ErrRegion       ErrKind = "region-inactive"
 	ErrThrottled    ErrKind = "throttled"
 	ErrNetwork      ErrKind = "network"
+	ErrMFA          ErrKind = "mfa-required"
 	ErrOther        ErrKind = "other"
 )
 
@@ -51,6 +53,11 @@ func Classify(err error) ErrKind {
 	var tokErr *ssocreds.InvalidTokenError
 	if errors.As(err, &tokErr) {
 		return ErrSSOExpired
+	}
+	// A role assumed with mfa_serial: the SDK needs a code that hop does not ask for.
+	var mfaErr awsconfig.AssumeRoleTokenProviderNotSetError
+	if errors.As(err, &mfaErr) {
+		return ErrMFA
 	}
 	if isNetwork(err) {
 		return ErrNetwork
@@ -154,6 +161,8 @@ func (k ErrKind) Explain() string {
 		return "too many requests, throttled by AWS"
 	case ErrNetwork:
 		return "network error or timeout"
+	case ErrMFA:
+		return "role assumed with an MFA code, which hop does not prompt for yet"
 	}
 	return "error"
 }

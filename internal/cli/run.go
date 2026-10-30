@@ -35,7 +35,7 @@ belong to the command: "hop run tools ls -la". Linux and macOS instances only.`,
 				return err
 			}
 			a.warnAgent(in)
-			a.recents.Touch(in.Key())
+			a.touch(in)
 			// Always say where the command is going, even from a script.
 			info("%s (%s, %s, %s)", in.Name, in.ID, in.Profile, in.Region)
 			out, err := session.Run(cmd.Context(), cfg, in.ID, []string{strings.Join(args[1:], " ")}, wait)
@@ -69,7 +69,7 @@ belong to the command: "hop run tools ls -la". Linux and macOS instances only.`,
 func newPush(f *filters) *cobra.Command {
 	return &cobra.Command{
 		Use:   "push <local-file> <instance> <remote-path>",
-		Short: "Upload a file of up to 400 KB and verify its SHA-256 (replaces scp)",
+		Short: fmt.Sprintf("Upload a file of up to %d KB and verify its SHA-256 (replaces scp)", session.PushLimit/1000),
 		Args:  cobra.ExactArgs(3),
 		ValidArgsFunction: func(cmd *cobra.Command, args []string, toComplete string) ([]string, cobra.ShellCompDirective) {
 			switch len(args) {
@@ -84,6 +84,10 @@ func newPush(f *filters) *cobra.Command {
 			if st, err := os.Stat(args[0]); err != nil || st.IsDir() {
 				return fmt.Errorf("file not found: %s", args[0])
 			}
+			// Before the picker, a question or a sign-in, which would all be for nothing.
+			if err := session.CheckPush(args[0], args[2]); err != nil {
+				return err
+			}
 			a, err := newApp(*f)
 			if err != nil {
 				return err
@@ -93,7 +97,7 @@ func newPush(f *filters) *cobra.Command {
 				return err
 			}
 			a.warnAgent(in)
-			a.recents.Touch(in.Key())
+			a.touch(in)
 			info("%s -> %s:%s", args[0], in.Name, args[2])
 			out, err := session.Push(cmd.Context(), cfg, in.ID, args[0], args[2])
 			// The remote shell says why a copy failed (permission denied, no such
@@ -147,7 +151,7 @@ administrator rights.`,
 				return err
 			}
 			a.warnAgent(in)
-			a.recents.Touch(in.Key())
+			a.touch(in)
 			req := session.Request{
 				Profile: in.Profile, Region: in.Region, InstanceID: in.ID, PreferSSO: a.preferSSO(in.Profile),
 				Document:   "AWS-StartPortForwardingSession",

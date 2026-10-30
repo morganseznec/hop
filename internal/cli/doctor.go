@@ -127,7 +127,13 @@ func (a *app) diagnose() []finding {
 			fix:    []string{"delete these lines, and deactivate the key in IAM if it is still active"}})
 	}
 
-	var static, temp, dual, noRegion []string
+	if len(files.Names()) == 0 {
+		add(finding{lvl: lvlCrit, title: "no AWS profile with credentials: hop has nothing to query",
+			detail: []string{"none in " + files.ConfigPath + " or " + files.CredentialsPath},
+			fix:    []string{`create one with "aws configure sso", then run hop ls`}})
+	}
+
+	var static, temp, dual, noRegion, mfa []string
 	for _, p := range files.Profiles {
 		switch {
 		case !p.Usable():
@@ -142,6 +148,15 @@ func (a *app) diagnose() []finding {
 		if p.Region == "" {
 			noRegion = append(noRegion, p.Name)
 		}
+		if files.MFAProfile(p.Name) != nil {
+			mfa = append(mfa, p.Name)
+		}
+	}
+	if len(mfa) > 0 {
+		add(finding{lvl: lvlWarn, title: fmt.Sprintf("%s need an MFA code (mfa_serial), which hop does not prompt for yet", plural(len(mfa), "profile")),
+			detail: append([]string{"hop skips them:"}, wrap(mfa, 6)...),
+			fix: []string{"use a profile without mfa_serial for these accounts",
+				"or get the credentials from aws-vault (or another credential_process), which asks for the code"}})
 	}
 	for _, n := range dual {
 		add(finding{lvl: lvlWarn, title: "profile " + n + " defined twice: SSO in config, keys in credentials",

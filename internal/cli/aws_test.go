@@ -19,6 +19,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/morganseznec/hop/internal/awsconf"
 	"github.com/morganseznec/hop/internal/config"
 	"github.com/morganseznec/hop/internal/inventory"
 	"github.com/morganseznec/hop/internal/state"
@@ -178,7 +179,7 @@ func fakeAWSEnv(t *testing.T) *fakeAWS {
 // more recent data (see inventory.Save): a test that ages the cache starts over.
 func rewriteCache(t *testing.T, inv *inventory.Inventory) {
 	t.Helper()
-	os.Remove(inventory.Path())
+	os.Remove(cachePath(t))
 	if err := inv.Save(); err != nil {
 		t.Fatal(err)
 	}
@@ -274,7 +275,7 @@ func TestRunExitCode(t *testing.T) {
 
 func TestScan(t *testing.T) {
 	fakeAWSEnv(t)
-	before, _ := os.ReadFile(config.Path())
+	before, _ := os.ReadFile(configPath(t))
 
 	_, stderr, err := runHop(t, "scan", "-p", "acme-billing")
 	if err != nil {
@@ -287,7 +288,7 @@ func TestScan(t *testing.T) {
 	if !strings.Contains(stderr, "acme-billing ap-south-1 not scanned") {
 		t.Errorf("a region that could not be read must be reported, not taken as empty:\n%s", stderr)
 	}
-	if after, _ := os.ReadFile(config.Path()); string(after) != string(before) {
+	if after, _ := os.ReadFile(configPath(t)); string(after) != string(before) {
 		t.Error("scan without --write changed the config")
 	}
 
@@ -302,7 +303,7 @@ func TestScan(t *testing.T) {
 	if strings.Join(cfg.ExtraRegions["acme-billing"], ",") != "us-east-1" || cfg.Label("acme-prod") != "ACME" {
 		t.Errorf("config after --write: %+v", cfg)
 	}
-	if bak, _ := os.ReadFile(config.Path() + ".bak"); string(bak) != string(before) {
+	if bak, _ := os.ReadFile(configPath(t) + ".bak"); string(bak) != string(before) {
 		t.Errorf("previous config not kept as .bak: %q", bak)
 	}
 
@@ -496,5 +497,96 @@ func TestReachWhenTheLookupFails(t *testing.T) {
 				t.Errorf("prompt %q", prompt)
 			}
 		})
+	}
+}
+
+func TestPushChecksBeforeResolving(t *testing.T) {
+	fake := fakeAWSEnv(t)
+	dir := t.TempDir()
+	big := filepath.Join(dir, "big.bin")
+	os.WriteFile(big, make([]byte, 400_001), 0o600)
+	small := filepath.Join(dir, "app.conf")
+	os.WriteFile(small, []byte("listen 8080\n"), 0o600)
+	cases := []struct {
+		args []string
+		want string
+	}{
+		// "nowhere" matches no instance: resolving it would fail differently, after a
+		// refresh.
+		{[]string{"push", big, "nowhere", "/opt/acme/big.bin"}, big + ": 400001 bytes, too large for this method (limit 400000)"},
+		{[]string{"push", small, "nowhere", "opt/acme/app.conf"}, "remote path must be absolute"},
+	}
+	for _, c := range cases {
+		_, _, err := runHop(t, c.args...)
+		if err == nil || !strings.Contains(err.Error(), c.want) {
+			t.Errorf("%v: error %v, want %q", c.args[1:], err, c.want)
+		}
+	}
+	fake.mu.Lock()
+	defer fake.mu.Unlock()
+	if len(fake.calls) != 0 {
+		t.Errorf("AWS called before the checks: %q", fake.calls)
+	}
+	if short := newPush(&filters{}).Short; !strings.Contains(short, "400 KB") {
+		t.Errorf("help %q", short)
+	}
+}
+
+func TestMFAProfilesAreSkipped(t *testing.T) {
+	fakeAWSEnv(t)
+	os.WriteFile(awsconf.ConfigPath(), []byte(mfaConfig), 0o600)
+	_, stderr, err := runHop(t, "ls", "--refresh", "-p", "billing-mfa*")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{
+		"hop: role assumed with an MFA code, which hop does not prompt for yet: billing-mfa, billing-mfa-2",
+		"use a profile without mfa_serial, or get the credentials from aws-vault or another credential_process",
+	} {
+		if !strings.Contains(stderr, want) {
+			t.Errorf("stderr does not mention %q:\n%s", want, stderr)
+		}
+	}
+	inv := inventory.Load()
+	tg := inv.Targets[inventory.TargetKey("billing-mfa-2", "eu-west-1")]
+	if tg == nil || tg.ErrKind != inventory.ErrMFA || !strings.Contains(tg.Err, "profile billing-mfa-2 needs an MFA code (mfa_serial in billing-mfa)") {
+		t.Fatalf("billing-mfa-2: %+v", tg)
+	}
+
+	// Recorded once: not queried again every minute.
+	tg.ErrAt = time.Now().Add(-time.Hour)
+	rewriteCache(t, inv)
+	if _, _, err := runHop(t, "ls", "-p", "billing-mfa*"); err != nil {
+		t.Fatal(err)
+	}
+	if again := inventory.Load().Targets[tg.Key()]; !again.ErrAt.Equal(tg.ErrAt) {
+		t.Errorf("recorded again at %v", again.ErrAt)
+	}
+
+	// Once mfa_serial is gone, the profile is queried right away.
+	os.WriteFile(awsconf.ConfigPath(), []byte(strings.ReplaceAll(mfaConfig, "mfa_serial", "# mfa_serial")), 0o600)
+	if _, _, err := runHop(t, "ls", "-p", "billing-mfa*"); err != nil {
+		t.Fatal(err)
+	}
+	if again := inventory.Load().Targets[tg.Key()]; again.ErrKind == inventory.ErrMFA {
+		t.Errorf("still recorded as needing MFA: %+v", again)
+	}
+}
+
+func TestCacheDropsRemovedProfiles(t *testing.T) {
+	fakeAWSEnv(t)
+	inv := inventory.Load()
+	gone := fresh("acme-old", "eu-west-1", instance("old-app", "i-0f01", "acme-old", "eu-west-1", "running", ""))
+	inv.Targets[gone.Key()] = gone
+	rewriteCache(t, inv)
+	if _, _, err := runHop(t, "ls", "--refresh", "-p", "acme-billing"); err != nil {
+		t.Fatal(err)
+	}
+	after := inventory.Load()
+	if _, ok := after.Targets[gone.Key()]; ok {
+		t.Error("the pair of a profile gone from the AWS files is still cached")
+	}
+	if _, ok := after.Targets[inventory.TargetKey("acme-prod", "eu-west-1")]; !ok {
+		t.Error("a profile outside -p was dropped")
 	}
 }

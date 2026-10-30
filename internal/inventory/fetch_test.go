@@ -673,3 +673,47 @@ func TestLookup(t *testing.T) {
 		})
 	}
 }
+
+func TestCheckTranscript(t *testing.T) {
+	cases := []struct {
+		name   string
+		status int
+		body   string
+		want   Transcript
+	}{
+		{"logged", 200, ssmDocument(`{"inputs":{"cloudWatchLogGroupName":"/acme/ssm/sessions"}}`), Transcript{Checked: true, Enabled: true, LogGroup: "/acme/ssm/sessions"}},
+		{"logging turned off", 200, ssmDocument(`{"inputs":{"cloudWatchLogGroupName":""}}`), Transcript{Checked: true}},
+		{"no document", 400, `{"__type":"InvalidDocument","message":"missing"}`, Transcript{Checked: true}},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			fake := &fakeAWS{status: map[string]int{"GetDocument": c.status}, body: map[string]string{"GetDocument": c.body}}
+			srv := httptest.NewServer(fake)
+			defer srv.Close()
+			fakeEnv(t, srv.URL)
+			cfg, err := AWSConfig(context.Background(), "acme-prod", "eu-west-1", false)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := CheckTranscript(context.Background(), cfg); got != c.want {
+				t.Errorf("got %+v, want %+v", got, c.want)
+			}
+			if calls := fake.called(); !slices.Equal(calls, []string{"GetDocument"}) {
+				t.Errorf("calls %v", calls)
+			}
+		})
+	}
+	t.Run("denied", func(t *testing.T) {
+		fake := &fakeAWS{status: map[string]int{"GetDocument": 400}, body: map[string]string{"GetDocument": `{"__type":"AccessDeniedException","message":"denied"}`}}
+		srv := httptest.NewServer(fake)
+		defer srv.Close()
+		fakeEnv(t, srv.URL)
+		cfg, err := AWSConfig(context.Background(), "acme-prod", "eu-west-1", false)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := CheckTranscript(context.Background(), cfg); got.Checked || got.Err == "" {
+			t.Errorf("got %+v, want an unchecked transcript with its error", got)
+		}
+	})
+}

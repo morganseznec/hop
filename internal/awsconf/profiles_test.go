@@ -412,6 +412,54 @@ region = eu-west-1
 	}
 }
 
+func TestMFAProfiles(t *testing.T) {
+	f := loadFiles(t, `[profile acme-prod]
+region = eu-west-1
+
+[profile acme-admin]
+role_arn = arn:aws:iam::111111111111:role/Admin
+source_profile = acme-prod
+mfa_serial = arn:aws:iam::111111111111:mfa/alice
+
+[profile acme-admin-2]
+role_arn = arn:aws:iam::111111111111:role/Admin2
+source_profile = acme-admin
+
+[profile acme-ro]
+role_arn = arn:aws:iam::111111111111:role/ReadOnly
+source_profile = acme-prod
+
+[profile acme-loop]
+role_arn = arn:aws:iam::111111111111:role/Loop
+source_profile = acme-loop
+
+[profile acme-keys-mfa]
+mfa_serial = arn:aws:iam::111111111111:mfa/bob
+`, "[acme-prod]\naws_access_key_id = AKIAFAKEFAKEFAKE0001\naws_secret_access_key = fictional-secret\n[acme-keys-mfa]\naws_access_key_id = AKIAFAKEFAKEFAKE0002\naws_secret_access_key = fictional-secret\n")
+	if p := f.Profile("acme-admin"); p.MFASerial != "arn:aws:iam::111111111111:mfa/alice" || !p.NeedsMFA() || !p.Usable() {
+		t.Errorf("acme-admin: %+v", p)
+	}
+	cases := map[string]string{
+		"acme-admin":   "acme-admin",
+		"acme-admin-2": "acme-admin", // through its source_profile
+		"acme-ro":      "",
+		"acme-prod":    "",
+		"acme-loop":    "",
+		"unknown":      "",
+		// mfa_serial without role_arn: the SDK ignores it.
+		"acme-keys-mfa": "",
+	}
+	for name, want := range cases {
+		got := ""
+		if p := f.MFAProfile(name); p != nil {
+			got = p.Name
+		}
+		if got != want {
+			t.Errorf("MFAProfile(%s) = %q, want %q", name, got, want)
+		}
+	}
+}
+
 func TestSSOSessionLookup(t *testing.T) {
 	f := loadFiles(t, `[profile acme-prod]
 sso_session = acme-sso

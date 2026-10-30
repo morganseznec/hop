@@ -53,3 +53,26 @@ func word(w string) string {
 	}
 	return ""
 }
+
+// NormalizeEnv maps an environment typed by the user to prod or test, with the words
+// DeriveEnv reads: "staging" or "dev" select the instances DeriveEnv files under test.
+// ok is false for any other word.
+func NormalizeEnv(s string) (env string, ok bool) {
+	env = word(strings.ToLower(strings.TrimSpace(s)))
+	return env, env != ""
+}
+
+// EnvWords returns, sorted, the other words that mean env (prod or test).
+func EnvWords(env string) []string {
+	words := testWords
+	if env == "prod" {
+		words = prodWords
+	}
+	var out []string
+	for _, w := range slices.Sorted(maps.Keys(words)) {
+		if w != env {
+			out = append(out, w)
+		}
+	}
+	return out
+}

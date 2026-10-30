@@ -2,6 +2,8 @@ package cli
 
 import (
 	"bytes"
+	"context"
+	"errors"
 	"os"
 	"regexp"
 	"strings"
@@ -166,7 +168,11 @@ func TestConfirm(t *testing.T) {
 		terminal(t, false, false)
 		stdin(t, "y\n")
 		var yes, no bool
-		out := capture(t, &os.Stderr, func() { yes, no = confirm("Sign in again now?", true), confirm("Open?", false) })
+		ctx := context.Background()
+		out := capture(t, &os.Stderr, func() {
+			yes, _ = confirm(ctx, "Sign in again now?", true)
+			no, _ = confirm(ctx, "Open?", false)
+		})
 		if yes || no {
 			t.Error("a question nobody can answer must give no")
 		}
@@ -196,9 +202,10 @@ func TestConfirm(t *testing.T) {
 			terminal(t, true, true)
 			stdin(t, c.input)
 			var got bool
-			prompt := capture(t, &os.Stderr, func() { got = confirm("Open anyway?", c.def) })
-			if got != c.want {
-				t.Errorf("confirm(%q, %v) = %v, want %v", c.input, c.def, got, c.want)
+			var err error
+			prompt := capture(t, &os.Stderr, func() { got, err = confirm(context.Background(), "Open anyway?", c.def) })
+			if got != c.want || err != nil {
+				t.Errorf("confirm(%q, %v) = %v, %v; want %v", c.input, c.def, got, err, c.want)
 			}
 			suffix := "[y/N]"
 			if c.def {
@@ -208,6 +215,74 @@ func TestConfirm(t *testing.T) {
 				t.Errorf("prompt %q", prompt)
 			}
 		})
+	}
+}
+
+// silentStdin replaces os.Stdin with a pipe that nobody writes to, as a terminal where
+// nobody presses Enter.
+func silentStdin(t *testing.T) {
+	t.Helper()
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	old := os.Stdin
+	os.Stdin = r
+	t.Cleanup(func() {
+		os.Stdin = old
+		w.Close()
+		r.Close()
+	})
+}
+
+func TestConfirmCanceled(t *testing.T) {
+	// Ctrl-C at the question: the answer is no, and the context error, without waiting
+	// for Enter (which would give the default, yes here).
+	for _, name := range []string{"while waiting", "before asking"} {
+		t.Run(name, func(t *testing.T) {
+			terminal(t, true, true)
+			silentStdin(t)
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			if name == "before asking" {
+				cancel()
+			} else {
+				time.AfterFunc(20*time.Millisecond, cancel)
+			}
+			start := time.Now()
+			var ok bool
+			var err error
+			capture(t, &os.Stderr, func() { ok, err = confirm(ctx, "Sign in again now?", true) })
+			if ok || !errors.Is(err, context.Canceled) {
+				t.Errorf("got %v, %v; want false and context.Canceled", ok, err)
+			}
+			if d := time.Since(start); d > 5*time.Second {
+				t.Errorf("returned after %s", d)
+			}
+			if err := ask(ctx, "Open anyway?", true); !errors.Is(err, context.Canceled) {
+				t.Errorf("ask: %v", err)
+			}
+		})
+	}
+}
+
+func TestAsk(t *testing.T) {
+	cases := []struct {
+		input string
+		want  error
+	}{
+		{"y\n", nil},
+		{"n\n", errAborted},
+		{"\n", errAborted}, // the default is no
+	}
+	for _, c := range cases {
+		terminal(t, true, true)
+		stdin(t, c.input)
+		var err error
+		capture(t, &os.Stderr, func() { err = ask(context.Background(), "Run the command there?", false) })
+		if !errors.Is(err, c.want) {
+			t.Errorf("%q: %v, want %v", c.input, err, c.want)
+		}
 	}
 }
 

@@ -284,6 +284,13 @@ func describeAgents(ctx context.Context, c *ssm.Client, profile, region string, 
 	return agents, managed, nil
 }
 
+// CheckTranscript reads the Session Manager preferences of the account in the region
+// of cfg now, without the cache: for a decision that must not rest on a setting read
+// up to the TTL ago.
+func CheckTranscript(ctx context.Context, cfg aws.Config) Transcript {
+	return transcript(ctx, ssm.NewFromConfig(cfg))
+}
+
 // transcript reads the Session Manager preferences. They live in the
 // SSM-SessionManagerRunShell document, one per account and per region: that is why an
 // account recorded in eu-west-1 is not necessarily recorded in us-east-1.

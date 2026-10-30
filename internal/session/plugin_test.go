@@ -171,6 +171,18 @@ func TestStartTerminatesWhenPluginCannotRun(t *testing.T) {
 	}
 }
 
+func TestTerminateWithACanceledContext(t *testing.T) {
+	// Ctrl-C may have canceled the caller's context: the session is closed anyway.
+	fake, cfg := newFake(t, startSessionOK)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	terminate(ctx, ssm.NewFromConfig(cfg), "acme-user-0abc")
+	term := fake.got("TerminateSession")
+	if len(term) != 1 || term[0]["SessionId"] != "acme-user-0abc" {
+		t.Errorf("TerminateSession calls: %v", term)
+	}
+}
+
 func TestStartErrors(t *testing.T) {
 	t.Run("no plugin", func(t *testing.T) {
 		t.Setenv("PATH", t.TempDir())

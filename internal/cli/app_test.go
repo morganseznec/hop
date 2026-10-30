@@ -1,18 +1,25 @@
 package cli
 
 import (
+	"bufio"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"reflect"
 	"runtime"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/aws/aws-sdk-go-v2/aws"
 
 	"github.com/morganseznec/hop/internal/awsconf"
 	"github.com/morganseznec/hop/internal/config"
@@ -256,28 +263,69 @@ func TestResolveTypoAsksFirst(t *testing.T) {
 	}
 }
 
+// docServer answers GetDocument with the given status and body, as the account of
+// the instance would, and counts the calls. It listens on the loopback interface only.
+func docServer(t *testing.T, status int, body string) (aws.Config, *atomic.Int32) {
+	t.Helper()
+	calls := &atomic.Int32{}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("X-Amz-Target") != "AmazonSSM.GetDocument" {
+			t.Errorf("unexpected call %s", r.Header.Get("X-Amz-Target"))
+		}
+		calls.Add(1)
+		w.Header().Set("Content-Type", "application/x-amz-json-1.1")
+		w.WriteHeader(status)
+		io.WriteString(w, body)
+	}))
+	t.Cleanup(srv.Close)
+	return aws.Config{
+		Region:           "eu-west-1",
+		BaseEndpoint:     aws.String(srv.URL),
+		RetryMaxAttempts: 1,
+		Credentials: aws.CredentialsProviderFunc(func(context.Context) (aws.Credentials, error) {
+			return aws.Credentials{AccessKeyID: "AKIAFAKEFAKEFAKE0001", SecretAccessKey: "fictional-secret"}, nil
+		}),
+	}, calls
+}
+
+// sessionDocument is the GetDocument answer for Session Manager preferences that log to
+// logGroup, or to nowhere when it is empty.
+func sessionDocument(logGroup string) string {
+	content, _ := json.Marshal(map[string]any{"inputs": map[string]string{"cloudWatchLogGroupName": logGroup}})
+	b, _ := json.Marshal(map[string]string{"Name": "SSM-SessionManagerRunShell", "Content": string(content)})
+	return string(b)
+}
+
 func TestTranscriptGate(t *testing.T) {
 	on := inventory.Transcript{Checked: true, Enabled: true, LogGroup: "/acme/ssm/sessions", Bucket: "acme-logs"}
 	off := inventory.Transcript{Checked: true}
 	unknown := inventory.Transcript{}
+	// What the account says now, read again for transcript: require.
+	logged := sessionDocument("/acme/ssm/sessions")
+	notLogged := sessionDocument("")
+	const denied = `{"__type":"AccessDeniedException","message":"no ssm:GetDocument"}`
 	cases := []struct {
 		name      string
 		policy    string
 		tr        *inventory.Transcript // nil: no inventory for the pair
+		doc       string                // GetDocument answer, require only
 		wantErr   string
 		wantAbort bool
 		stderr    string
 	}{
-		{"logged", config.TranscriptWarn, &on, "", false, "session LOGGED on acme-p-tools (i-01, acme-prod, eu-west-1) to /acme/ssm/sessions and s3://acme-logs"},
-		{"logged, require", config.TranscriptRequire, &on, "", false, "session LOGGED"},
-		{"off policy skips the check", config.TranscriptOff, &off, "", false, "hop: session on acme-p-tools"},
-		{"not verified, warn", config.TranscriptWarn, &unknown, "", false, "session logging not verified for acme-prod in eu-west-1"},
-		{"not verified, require", config.TranscriptRequire, &unknown, "session logging cannot be verified for acme-prod in eu-west-1", false, ""},
-		{"no inventory, require", config.TranscriptRequire, nil, "cannot be verified", false, ""},
-		{"not logged, require", config.TranscriptRequire, &off, "session refused (transcript: require)", false, "does NOT log sessions"},
+		{"logged", config.TranscriptWarn, &on, "", "", false, "session LOGGED on acme-p-tools (i-01, acme-prod, eu-west-1) to /acme/ssm/sessions and s3://acme-logs"},
+		{"logged, require", config.TranscriptRequire, &on, logged, "", false, "session LOGGED on acme-p-tools (i-01, acme-prod, eu-west-1) to /acme/ssm/sessions."},
+		{"off policy skips the check", config.TranscriptOff, &off, "", "", false, "hop: session on acme-p-tools"},
+		{"not verified, warn", config.TranscriptWarn, &unknown, "", "", false, "session logging not verified for acme-prod in eu-west-1"},
+		{"not verified, require", config.TranscriptRequire, &unknown, denied, "session logging cannot be verified for acme-prod in eu-west-1 (", false, ""},
+		{"no inventory, require", config.TranscriptRequire, nil, denied, "cannot be verified", false, ""},
+		{"not logged, require", config.TranscriptRequire, &off, notLogged, "session refused (transcript: require)", false, "does NOT log sessions"},
+		// The cache is up to the TTL old: what the account says now wins, both ways.
+		{"turned off since the cache, require", config.TranscriptRequire, &on, notLogged, "session refused (transcript: require)", false, "does NOT log sessions"},
+		{"unknown in the cache, logged now, require", config.TranscriptRequire, &unknown, logged, "", false, "session LOGGED"},
 		// Without a terminal, the question gets its default answer: no.
-		{"not logged, warn, no terminal", config.TranscriptWarn, &off, "", true, "account acme-prod does NOT log sessions in eu-west-1"},
-		{"not logged, default policy", "", &off, "", true, "does NOT log sessions"},
+		{"not logged, warn, no terminal", config.TranscriptWarn, &off, "", "", true, "account acme-prod does NOT log sessions in eu-west-1"},
+		{"not logged, default policy", "", &off, "", "", true, "does NOT log sessions"},
 	}
 	in := instance("acme-p-tools", "i-01", "acme-prod", "eu-west-1", "running", "prod")
 	for _, c := range cases {
@@ -289,9 +337,14 @@ func TestTranscriptGate(t *testing.T) {
 				tg.Transcript = *c.tr
 				targets = append(targets, tg)
 			}
+			status := http.StatusOK
+			if c.doc == denied {
+				status = http.StatusBadRequest
+			}
+			cfg, calls := docServer(t, status, c.doc)
 			a := newTestApp(t, &config.Config{Transcript: c.policy}, filters{}, targets...)
 			var err error
-			out := capture(t, &os.Stderr, func() { err = a.transcriptGate(in) })
+			out := capture(t, &os.Stderr, func() { err = a.transcriptGate(context.Background(), cfg, in) })
 			switch {
 			case c.wantAbort:
 				if !errors.Is(err, errAborted) {
@@ -307,7 +360,27 @@ func TestTranscriptGate(t *testing.T) {
 			if !strings.Contains(out, c.stderr) {
 				t.Errorf("stderr %q does not mention %q", out, c.stderr)
 			}
+			// Only require reads the document again.
+			want := int32(0)
+			if c.policy == config.TranscriptRequire {
+				want = 1
+			}
+			if n := calls.Load(); n != want {
+				t.Errorf("%d GetDocument calls, want %d", n, want)
+			}
 		})
+	}
+}
+
+func TestTranscriptGateRequireUpdatesTheCache(t *testing.T) {
+	terminal(t, false, false)
+	in := instance("acme-p-tools", "i-01", "acme-prod", "eu-west-1", "running", "prod")
+	tg := fresh("acme-prod", "eu-west-1", in)
+	a := newTestApp(t, &config.Config{Transcript: config.TranscriptRequire}, filters{}, tg)
+	cfg, _ := docServer(t, http.StatusOK, sessionDocument(""))
+	capture(t, &os.Stderr, func() { a.transcriptGate(context.Background(), cfg, in) })
+	if got := a.target(in).Transcript; !got.Checked || got.Enabled {
+		t.Errorf("transcript after the check: %+v", got)
 	}
 }
 
@@ -319,7 +392,7 @@ func TestTranscriptGateConfirmed(t *testing.T) {
 	tg.Transcript = inventory.Transcript{Checked: true}
 	a := newTestApp(t, nil, filters{}, tg)
 	var err error
-	out := capture(t, &os.Stderr, func() { err = a.transcriptGate(in) })
+	out := capture(t, &os.Stderr, func() { err = a.transcriptGate(context.Background(), aws.Config{}, in) })
 	if err != nil || !strings.Contains(out, "Open anyway? [y/N]") || !strings.Contains(out, "session NOT logged on acme-p-tools") {
 		t.Errorf("%v\n%s", err, out)
 	}
@@ -999,7 +1072,7 @@ func TestEnsureCanceled(t *testing.T) {
 	if len(a.fetched) != 0 {
 		t.Errorf("pairs marked as queried: %v", a.fetched)
 	}
-	if _, err := os.Stat(inventory.Path()); !os.IsNotExist(err) {
+	if _, err := os.Stat(cachePath(t)); !os.IsNotExist(err) {
 		t.Errorf("cache written after Ctrl-C: %v", err)
 	}
 	// resolve stops there too, instead of opening the picker.
@@ -1233,5 +1306,194 @@ func TestBackgroundRefresh(t *testing.T) {
 	a.background = false
 	if todo := a.stale(false); len(todo) != 2 {
 		t.Errorf("by hand, credential_process profiles are queried: %+v", todo)
+	}
+}
+
+func TestLsJSONStaleAfterTheTTL(t *testing.T) {
+	a := newTestApp(t, &config.Config{CacheTTL: "15m"}, filters{}, fleetTargets()...)
+	a.inv.Targets[inventory.TargetKey("globex", "us-east-1")].FetchedAt = time.Now().Add(-20 * time.Minute)
+	out := capture(t, &os.Stdout, func() { a.printJSON(a.instances(false)) })
+	var rows []struct {
+		ID    string `json:"id"`
+		Stale bool   `json:"stale"`
+		Error string `json:"error"`
+	}
+	if err := json.Unmarshal([]byte(out), &rows); err != nil {
+		t.Fatal(err)
+	}
+	for _, r := range rows {
+		if r.Stale != (r.ID == "i-05") || r.Error != "" {
+			t.Errorf("row %+v", r)
+		}
+	}
+}
+
+func TestEmptyScopeSaysWhichFilter(t *testing.T) {
+	t.Run("include and exclude", func(t *testing.T) {
+		fleetEnv(t)
+		terminal(t, false, false)
+		os.WriteFile(configPath(t), []byte("include: [shop-*]\n"), 0o600)
+		_, _, err := runHop(t, "ls")
+		if err == nil || err.Error() != "include and exclude in "+configPath(t)+" leave none of the 4 profiles with credentials in scope" {
+			t.Errorf("%v", err)
+		}
+	})
+	t.Run("-p without credentials", func(t *testing.T) {
+		fleetEnv(t)
+		terminal(t, false, false)
+		_, _, err := runHop(t, "run", "-p", "default", "tools", "uptime")
+		if err == nil || err.Error() != "-p default matches only profiles without credentials (default)" {
+			t.Errorf("%v", err)
+		}
+	})
+	t.Run("-e on hop ls", func(t *testing.T) {
+		fleetEnv(t)
+		terminal(t, false, false)
+		_, stderr, err := runHop(t, "ls", "-p", "acme-prod", "-e", "staging")
+		if err != nil || !strings.Contains(stderr, "hop: no instances: -e test filters out 2 instances\n") {
+			t.Errorf("%v\n%s", err, stderr)
+		}
+	})
+
+	stoppedOnly := fresh("acme-prod", "eu-west-1", instance("acme-p-proxy", "i-02", "acme-prod", "eu-west-1", "stopped", "prod"))
+	cases := []struct {
+		name    string
+		f       filters
+		targets []*inventory.Target
+		all     bool
+		want    string
+	}{
+		{"stopped only", filters{profiles: []string{"acme-prod"}}, []*inventory.Target{stoppedOnly}, false, "1 instance not running, see hop ls --all"},
+		{"stopped only, --all", filters{profiles: []string{"acme-prod"}}, []*inventory.Target{stoppedOnly}, true, ""},
+		{"-e", filters{profiles: []string{"acme-prod"}, env: "test"}, fleetTargets(), false, "-e test filters out 2 instances"},
+		{"-r", filters{profiles: []string{"acme-prod", "acme-data"}, regions: []string{"us-east-1"}}, fleetTargets(), false,
+			"-r us-east-1 filters out 3 instances in the profiles' own regions"},
+		{"-r, nothing elsewhere either", filters{profiles: []string{"acme-billing"}, regions: []string{"us-east-1"}}, fleetTargets(), false, ""},
+		{"no instances at all", filters{profiles: []string{"acme-billing"}}, fleetTargets(), false, ""},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			a := newTestApp(t, nil, c.f, c.targets...)
+			if got := a.emptyReason(c.all); got != c.want {
+				t.Errorf("got %q, want %q", got, c.want)
+			}
+		})
+	}
+
+	t.Run("a search with nothing left to search", func(t *testing.T) {
+		isolate(t)
+		terminal(t, false, false)
+		a := newTestApp(t, nil, filters{profiles: []string{"globex"}, env: "prod"}, fleetTargets()...)
+		fetchedNow(a)
+		var err error
+		capture(t, &os.Stderr, func() { _, _, err = a.resolve(context.Background(), []string{"tools"}, forShell) })
+		if err == nil || err.Error() != `no instance matches "tools" (-e prod filters out 1 instance)` {
+			t.Errorf("%v", err)
+		}
+	})
+
+	t.Run("picker without a running instance", func(t *testing.T) {
+		isolate(t)
+		terminal(t, false, false)
+		a := newTestApp(t, nil, filters{profiles: []string{"acme-prod"}}, stoppedOnly)
+		fetchedNow(a)
+		var err error
+		capture(t, &os.Stderr, func() { _, _, err = a.resolve(context.Background(), nil, forShell) })
+		if err == nil || err.Error() != "no running instance in scope: 1 instance not running, see hop ls --all" {
+			t.Errorf("%v", err)
+		}
+	})
+}
+
+// mfaConfig adds roles assumed with an MFA code: one on the static keys of
+// acme-billing, one chained on top of it.
+const mfaConfig = fleetConfig + `
+[profile billing-mfa]
+role_arn = arn:aws:iam::444444444444:role/Admin
+source_profile = acme-billing
+mfa_serial = arn:aws:iam::444444444444:mfa/alice
+region = eu-west-1
+
+[profile billing-mfa-2]
+role_arn = arn:aws:iam::444444444444:role/ReadOnly
+source_profile = billing-mfa
+region = eu-west-1
+`
+
+func TestAWSConfigRefusesMFAProfiles(t *testing.T) {
+	isolate(t)
+	terminal(t, false, false)
+	a := newTestApp(t, nil, filters{})
+	a.files = loadFiles(t, mfaConfig, fleetCredentials)
+	in := instance("billing-app", "i-31", "billing-mfa-2", "eu-west-1", "running", "")
+	_, err := a.awsConfig(context.Background(), in)
+	want := "profile billing-mfa-2 needs an MFA code (mfa_serial in billing-mfa), and hop does not prompt for MFA codes yet: use a profile without MFA, or one whose credentials come from aws-vault or another credential_process"
+	if err == nil || err.Error() != want {
+		t.Errorf("error %v", err)
+	}
+}
+
+func TestDescribeAllIsBounded(t *testing.T) {
+	var items []inventory.Instance
+	for i := range 8 {
+		items = append(items, instance(fmt.Sprintf("web-%d", i), fmt.Sprintf("i-%02d", i), "acme-prod", "eu-west-1", "running", "prod"))
+	}
+	got := describeAll(items)
+	if !strings.HasPrefix(got, "web-0 (acme-prod, eu-west-1); ") || !strings.HasSuffix(got, "web-4 (acme-prod, eu-west-1); and 3 more") {
+		t.Errorf("%q", got)
+	}
+	if got := describeAll(items[:5]); strings.Contains(got, "more") || strings.Count(got, ";") != 4 {
+		t.Errorf("five: %q", got)
+	}
+	if err := severalMatch(items); !strings.Contains(err.Error(), "and 3 more") {
+		t.Errorf("severalMatch: %v", err)
+	}
+}
+
+func TestAWSConfigCanceledAtThePrompt(t *testing.T) {
+	// Ctrl-C at "Sign in again now? [Y/n]": no sign-in, the context error (exit 130),
+	// even though Enter would answer yes.
+	fleetEnv(t) // no aws CLI on PATH: a sign-in would say so
+	terminal(t, true, true)
+	silentStdin(t)
+	a := newTestApp(t, nil, filters{})
+	in := instance("acme-p-tools", "i-01", "acme-prod", "eu-west-1", "running", "prod")
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	old := os.Stderr
+	os.Stderr = w
+	t.Cleanup(func() { os.Stderr = old })
+	seen := make(chan string)
+	go func() {
+		// Cancel as soon as the question shows up, as Ctrl-C would.
+		var got strings.Builder
+		br := bufio.NewReader(r)
+		for {
+			b, err := br.ReadByte()
+			if err != nil {
+				break
+			}
+			got.WriteByte(b)
+			if strings.HasSuffix(got.String(), "[Y/n] ") {
+				cancel()
+			}
+		}
+		io.Copy(io.Discard, r)
+		seen <- got.String()
+	}()
+	_, err = a.awsConfig(ctx, in)
+	os.Stderr = old
+	w.Close()
+	out := <-seen
+	if !errors.Is(err, context.Canceled) {
+		t.Errorf("error %v, want context.Canceled", err)
+	}
+	if !strings.Contains(out, "Sign in again now?") || strings.Contains(out, "aws CLI not found") {
+		t.Errorf("stderr %q", out)
 	}
 }

@@ -8,7 +8,11 @@ import (
 	"os"
 	"os/exec"
 	"os/signal"
+	"runtime/debug"
+	"strings"
+	"time"
 
+	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/spf13/cobra"
 
 	"github.com/morganseznec/hop/internal/config"
@@ -16,7 +20,28 @@ import (
 	"github.com/morganseznec/hop/internal/session"
 )
 
+// version is set at link time by the release build.
 var version = "dev"
+
+// buildVersion returns the version set at link time, or else the module version that
+// go install records (go install ...@v1.4.0 or @latest), so that such a build does not
+// call itself dev.
+func buildVersion() string {
+	info, ok := debug.ReadBuildInfo()
+	if !ok {
+		return version
+	}
+	return versionOf(version, info.Main.Version)
+}
+
+// versionOf returns linked unless it is the default "dev", then the module version
+// without its v (as release builds print it), unless go build left "(devel)" there.
+func versionOf(linked, module string) string {
+	if linked != "dev" || module == "" || module == "(devel)" {
+		return linked
+	}
+	return strings.TrimPrefix(module, "v")
+}
 
 // exitError carries an exit code without a message: the remote command's, for
 // example.
@@ -68,7 +93,7 @@ or IP, or by whole words of its name, connects directly; a looser match asks fir
   hop tunnel tools 3000       port forwarding
   hop login                   sign in again to expired SSO portals
   hop doctor                  check this machine's AWS configuration`,
-		Version:           version,
+		Version:           buildVersion(),
 		Args:              cobra.ArbitraryArgs,
 		SilenceUsage:      true,
 		SilenceErrors:     true,
@@ -80,7 +105,7 @@ or IP, or by whole words of its name, connects directly; a looser match asks fir
 	pf := root.PersistentFlags()
 	pf.StringSliceVarP(&f.profiles, "profile", "p", nil, "AWS profile(s), patterns allowed (shop-*)")
 	pf.StringSliceVarP(&f.regions, "region", "r", nil, "region(s) to query instead of the profile's own")
-	pf.StringVarP(&f.env, "env", "e", "", "prod or test")
+	pf.StringVarP(&f.env, "env", "e", "", "prod or test (dev, staging, qa, uat... count as test)")
 	pf.BoolVar(&f.refresh, "refresh", false, "ignore the cache and query AWS again")
 	_ = root.RegisterFlagCompletionFunc("profile", completeProfiles)
 	_ = root.RegisterFlagCompletionFunc("env", cobra.FixedCompletions([]string{"prod", "test"}, cobra.ShellCompDirectiveNoFileComp))
@@ -104,11 +129,11 @@ func connect(ctx context.Context, f filters, args []string) error {
 	if err != nil {
 		return err
 	}
-	if err := a.transcriptGate(in); err != nil {
+	if err := a.transcriptGate(ctx, cfg, in); err != nil {
 		return err
 	}
 	a.warnAgent(in)
-	a.recents.Touch(in.Key())
+	a.touch(in)
 	return pluginExit(session.Start(ctx, cfg, session.Request{Profile: in.Profile, Region: in.Region, InstanceID: in.ID, PreferSSO: a.preferSSO(in.Profile)}))
 }
 
@@ -124,11 +149,27 @@ func pluginExit(err error) error {
 // transcriptGate shows what will be recorded, based on the account's setting in the
 // region rather than on principle: an account with no destination configured records
 // nothing.
-func (a *app) transcriptGate(in inventory.Instance) error {
+//
+// The setting comes from the cache, up to the TTL old. With transcript: require, it is
+// read again from the account (with cfg, the credentials of the instance) before the
+// session opens: logging turned off minutes ago must not let a session through.
+func (a *app) transcriptGate(ctx context.Context, cfg aws.Config, in inventory.Instance) error {
 	policy := a.cfg.TranscriptPolicy()
 	var tr inventory.Transcript
-	if t := a.target(in); t != nil {
+	t := a.target(in)
+	if t != nil {
 		tr = t.Transcript
+	}
+	if policy == config.TranscriptRequire {
+		cctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+		tr = inventory.CheckTranscript(cctx, cfg)
+		cancel()
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		if t != nil && tr.Checked {
+			t.Transcript = tr
+		}
 	}
 	where := fmt.Sprintf("%s (%s, %s, %s)", in.Name, in.ID, in.Profile, in.Region)
 	switch {
@@ -138,7 +179,11 @@ func (a *app) transcriptGate(in inventory.Instance) error {
 		fmt.Fprintln(os.Stderr, paint(stderrTTY, cBold, fmt.Sprintf("hop: session LOGGED on %s to %s. Everything that follows is recorded.", where, tr.Destination())))
 	case !tr.Checked:
 		if policy == config.TranscriptRequire {
-			return fmt.Errorf("session logging cannot be verified for %s in %s: session refused (transcript: require)", in.Profile, in.Region)
+			msg := fmt.Sprintf("session logging cannot be verified for %s in %s", in.Profile, in.Region)
+			if tr.Err != "" {
+				msg += " (" + shortError(tr.Err) + ")"
+			}
+			return errors.New(msg + ": session refused (transcript: require)")
 		}
 		warn("session logging not verified for %s in %s", in.Profile, in.Region)
 		info("session on %s", where)
@@ -148,8 +193,8 @@ func (a *app) transcriptGate(in inventory.Instance) error {
 		if policy == config.TranscriptRequire {
 			return errors.New("session refused (transcript: require)")
 		}
-		if !confirm("Open anyway?", false) {
-			return errAborted
+		if err := ask(ctx, "Open anyway?", false); err != nil {
+			return err
 		}
 		info("session NOT logged on %s", where)
 	}

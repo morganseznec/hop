@@ -181,7 +181,19 @@ typed (`hop -p acme-prod <Tab>`).
 | Find forgotten regions | `hop scan`, `hop scan --write` |
 
 Global flags: `-p/--profile` (glob patterns accepted), `-r/--region`, `-e/--env`
-(`prod` or `test`), `--refresh` (ignore the cache).
+(`prod` or `test`; `staging`, `dev`, `qa`, `uat` and the other words listed below
+select `test`), `--refresh` (ignore the cache).
+
+`hop ls --json` prints one object per instance (`id`, `name`, `profile`, `region`,
+`private_ip`, `state`, `env`, `platform`, `agent`, `last_ping`, `also_via`, `label`,
+`transcript`), and says how fresh each one is:
+
+- `fetched_at`: when its profile and region were last read successfully (RFC 3339,
+  UTC);
+- `stale`: `true` when the last read failed or is older than `cache_ttl`;
+- `error`: why the last read failed, absent when it did not.
+
+Unreachable accounts are also reported on stderr, as with `hop ls`.
 
 ### How search works
 
@@ -212,7 +224,10 @@ Global flags: `-p/--profile` (glob patterns accepted), `-r/--region`, `-e/--env`
 
 The environment (`prod`, `test`) comes from an `Environment`, `Env` or `Stage` tag when
 there is one, otherwise from words in the instance or profile name (`acme-p-tools`,
-`acme-shop-test`).
+`acme-shop-test`). There are only two groups: `prod`, `prd`, `production` and `p` mean
+`prod`; `test`, `tst`, `t`, `dev`, `staging`, `stg`, `preprod`, `qa`, `uat` and `recette`
+all mean `test`. `-e` accepts any of these words, so `-e staging` lists every non-production
+instance, and refuses any other.
 
 ### Before opening a shell
 
@@ -220,7 +235,9 @@ there is one, otherwise from words in the instance or profile name (`acme-p-tool
    carries on.
 2. **Session logging.** hop reads the `SSM-SessionManagerRunShell` document of the
    account in that region. It shows where the session is logged (CloudWatch Logs or
-   S3), or warns and asks when it is not.
+   S3), or warns and asks when it is not. With `transcript: require`, the document is
+   read again right before the session opens, rather than taken from the cache, and the
+   session is refused when it is not logged or cannot be checked.
 3. **SSM agent.** hop warns when the agent was offline at the last inventory.
 
 A shell never opens without a terminal. In scripts, use `hop run`.
@@ -251,6 +268,11 @@ pick the keys. `hop doctor` points these out.
 
 An instance visible through two profiles (two roles on the same account) is listed
 once.
+
+hop does not prompt for MFA codes yet: a profile that assumes a role with `mfa_serial`
+(directly or through its `source_profile`) is skipped and reported, by `hop ls` and
+`hop doctor`. Use a profile without MFA for these accounts, or get the credentials from
+[aws-vault](https://github.com/99designs/aws-vault) or another `credential_process`.
 
 ## Configuration
 

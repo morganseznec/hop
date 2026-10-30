@@ -2,6 +2,7 @@ package cli
 
 import (
 	"bufio"
+	"context"
 	"fmt"
 	"io"
 	"os"
@@ -51,23 +52,57 @@ func hint(format string, a ...any) {
 // confirm asks a yes/no question; def is the answer to Enter. Without a terminal,
 // nobody can answer: it returns false without waiting, so a script never signs in,
 // connects or opens anything on a default.
-func confirm(question string, def bool) bool {
+//
+// Ctrl-C does not stop the read of a line: the signal only cancels ctx. confirm then
+// returns false and the context error right away, without waiting for Enter, which
+// would give the default answer. The goroutine left reading stdin ends with the
+// process.
+func confirm(ctx context.Context, question string, def bool) (bool, error) {
 	if !stdinTTY || !stderrTTY {
-		return false
+		return false, nil
+	}
+	if err := ctx.Err(); err != nil {
+		return false, err
 	}
 	suffix := " [y/N] "
 	if def {
 		suffix = " [Y/n] "
 	}
 	fmt.Fprint(os.Stderr, paint(true, cBold, "hop: "+question)+suffix)
-	line, _ := bufio.NewReader(os.Stdin).ReadString('\n')
+	answer := make(chan string, 1)
+	in := os.Stdin
+	go func() {
+		line, _ := bufio.NewReader(in).ReadString('\n')
+		answer <- line
+	}()
+	var line string
+	select {
+	case <-ctx.Done():
+		// The prompt stays open on the line: end it.
+		fmt.Fprintln(os.Stderr)
+		return false, ctx.Err()
+	case line = <-answer:
+	}
 	switch strings.ToLower(strings.TrimSpace(line)) {
 	case "":
-		return def
+		return def, nil
 	case "y", "yes":
-		return true
+		return true, nil
 	}
-	return false
+	return false, nil
+}
+
+// ask asks like confirm and turns the answer into an error: nil for yes, errAborted
+// for no, the context error on Ctrl-C.
+func ask(ctx context.Context, question string, def bool) error {
+	ok, err := confirm(ctx, question, def)
+	switch {
+	case err != nil:
+		return err
+	case !ok:
+		return errAborted
+	}
+	return nil
 }
 
 // table aligns columns where some cells are colored: tabwriter counts ANSI sequences
