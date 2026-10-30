@@ -22,6 +22,13 @@ type section struct {
 // counted for diagnostics, without ever reading its value.
 var commentedKey = regexp.MustCompile(`^[#;]\s*aws_(access_key_id|secret_access_key|session_token)\s*=`)
 
+// secretKeys are only recorded as present: hop needs to know that a profile has keys,
+// never their value, so the value is not kept in memory.
+var secretKeys = map[string]bool{"aws_secret_access_key": true, "aws_session_token": true}
+
+// present stands for the value of a secret key that is set.
+const present = "(set)"
+
 // parseINI returns the sections in file order. Indented sub-sections (`s3 =` followed
 // by indented lines) are skipped: none of them concerns credentials.
 func parseINI(r io.Reader) (sections []section, commented int, err error) {
@@ -40,6 +47,14 @@ func parseINI(r io.Reader) (sections []section, commented int, err error) {
 				commented++
 			}
 			continue
+		}
+		// A comment may follow a section header ("[profile prod] # production"): the SDK
+		// and the AWS CLI accept it. Missing it would file the section's keys under the
+		// previous profile.
+		if line[0] == '[' {
+			if i := strings.IndexAny(line, "#;"); i > 0 {
+				line = strings.TrimSpace(line[:i])
+			}
 		}
 		if line[0] == '[' && strings.HasSuffix(line, "]") {
 			name := strings.Join(strings.Fields(line[1:len(line)-1]), " ")
@@ -61,6 +76,9 @@ func parseINI(r io.Reader) (sections []section, commented int, err error) {
 		k = strings.ToLower(strings.TrimSpace(k))
 		v = strings.TrimSpace(v)
 		nested = v == ""
+		if secretKeys[k] && v != "" {
+			v = present
+		}
 		cur.keys[k] = v
 	}
 	return sections, commented, sc.Err()

@@ -89,6 +89,11 @@ func (f *fakeAWS) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		case "us-east-1":
 			items = `<item><instanceId>i-0b02</instanceId><instanceState><code>80</code><name>stopped</name></instanceState>` +
 				`<tagSet><item><key>Name</key><value>acme-b-legacy</value></item></tagSet></item>`
+		case "ap-south-1":
+			// A region the caller may not read (an SCP, for instance).
+			w.WriteHeader(http.StatusForbidden)
+			io.WriteString(w, `<Response><Errors><Error><Code>UnauthorizedOperation</Code><Message>denied</Message></Error></Errors></Response>`)
+			return
 		}
 		io.WriteString(w, `<DescribeInstancesResponse`+ns+`><reservationSet><item><instancesSet>`+items+
 			`</instancesSet></item></reservationSet></DescribeInstancesResponse>`)
@@ -186,6 +191,9 @@ func TestScan(t *testing.T) {
 	if !strings.Contains(stderr, "acme-billing") || !strings.Contains(stderr, "acme-b-legacy") ||
 		!strings.Contains(stderr, "extra_regions:\n  acme-billing: [us-east-1]") {
 		t.Errorf("suggestion:\n%s", stderr)
+	}
+	if !strings.Contains(stderr, "acme-billing ap-south-1 not scanned") {
+		t.Errorf("a region that could not be read must be reported, not taken as empty:\n%s", stderr)
 	}
 	if after, _ := os.ReadFile(config.Path()); string(after) != string(before) {
 		t.Error("scan without --write changed the config")
