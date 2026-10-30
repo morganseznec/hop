@@ -8,8 +8,15 @@ All notable changes to hop are listed here. The format follows
 
 ## [0.1.7] - 2026-10-30
 
-No change to the hop binary since 0.1.6: this release publishes the renamed
-Homebrew cask through the release pipeline.
+This release publishes the renamed Homebrew cask through the release pipeline and
+fixes concurrent cache writes on Windows.
+
+### Fixed
+
+- Windows: two hop processes saving the cache at the same time could overwrite each
+  other. A lock file being deleted answers "access is denied" on Windows, which was
+  taken as no lock; it now counts as held, and the atomic rename of the cache and of
+  `recents.json` is retried while another process has the file open.
 
 ### Changed
 
