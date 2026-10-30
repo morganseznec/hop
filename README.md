@@ -189,13 +189,24 @@ Global flags: `-p/--profile` (glob patterns accepted), `-r/--region`, `-e/--env`
   ID or IP is exactly what you typed, or whose name contains every word you typed as
   a whole word (`hop shop app` for `acme-p-shop-app`).
 - An IP address or an instance ID must match exactly: `10.0.1.2` never picks
-  `10.0.1.21`.
+  `10.0.1.21`. Private IPs repeat across accounts, so with several profiles in scope
+  `run` and `push` ask before acting on an IP (or refuse without a terminal: narrow
+  with `-p`).
+- Hybrid nodes (`mi-...`) report their own name and IP: only their ID is trusted
+  without a question.
 - Anything else asks first: the picker when several instances match (the same name in
   two accounts, an Auto Scaling group), a confirmation for a single partial match or a
   typo. For `run` and `push`, the confirmation defaults to no.
 - Without a terminal, hop never guesses: it lists the candidates and stops.
-- Partial matches are checked against fresh data before hop asks, so an instance
-  launched minutes ago is found.
+- When a search finds nothing, only a partial match or only stopped instances, hop
+  first queries again the accounts whose data is more than a minute old, so an
+  instance launched minutes ago is found. A word search that opens the picker shows
+  the cache as is.
+- Before acting on an instance whose data is more than a minute old, hop looks that
+  one instance up again in its account. If it is gone, stopped, or no longer matches
+  what you typed, hop says what changed and searches once more. If the lookup fails,
+  a shell or a tunnel goes ahead, while `run` and `push` ask first (and refuse without
+  a terminal).
 - Stopped instances are shown as stopped, not as "not found".
 - Instances you used in the last seven days come first.
 

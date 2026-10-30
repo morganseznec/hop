@@ -1,15 +1,19 @@
 package cli
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
 	"os"
 	"path/filepath"
+	"reflect"
 	"regexp"
+	"sort"
 	"strings"
 	"sync"
 	"testing"
@@ -26,6 +30,34 @@ import (
 type fakeAWS struct {
 	mu       sync.Mutex
 	commands []string
+	// calls lists the EC2 and SSM operations, with the instance asked for when the call
+	// is narrowed to one ("DescribeInstances i-0b01").
+	calls []string
+	// appState and appName replace those of acme-b-app (i-0b01) in eu-west-1.
+	appState, appName string
+	// lookupDenied refuses DescribeInstances narrowed to one instance.
+	lookupDenied bool
+}
+
+// inventoryCalls returns the calls made to list or look up instances, sorted: what
+// SendCommand needs is left out.
+func (f *fakeAWS) inventoryCalls() []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	var out []string
+	for _, c := range f.calls {
+		if !strings.HasPrefix(c, "SendCommand") && !strings.HasPrefix(c, "GetCommandInvocation") {
+			out = append(out, c)
+		}
+	}
+	sort.Strings(out)
+	return out
+}
+
+func (f *fakeAWS) record(call string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.calls = append(f.calls, call)
 }
 
 var credentialRegion = regexp.MustCompile(`Credential=[^/]+/\d{8}/([^/]+)/`)
@@ -40,6 +72,12 @@ func (f *fakeAWS) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/x-amz-json-1.1")
 		var req map[string]any
 		json.Unmarshal(body, &req)
+		call := strings.TrimPrefix(target, "AmazonSSM.")
+		if filters, ok := req["Filters"].([]any); ok && len(filters) > 0 {
+			ids, _ := filters[0].(map[string]any)["Values"].([]any)
+			call += " " + fmt.Sprint(ids...)
+		}
+		f.record(call)
 		switch strings.TrimPrefix(target, "AmazonSSM.") {
 		case "DescribeInstanceInformation":
 			io.WriteString(w, `{"InstanceInformationList":[{"InstanceId":"i-0b01","PingStatus":"Online","PlatformName":"Amazon Linux"}]}`)
@@ -73,6 +111,25 @@ func (f *fakeAWS) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	form, _ := url.ParseQuery(string(body))
 	w.Header().Set("Content-Type", "text/xml")
 	const ns = ` xmlns="http://ec2.amazonaws.com/doc/2016-11-15/"`
+	call := form.Get("Action")
+	if id := form.Get("InstanceId.1"); id != "" {
+		call += " " + id
+	}
+	f.record(call)
+	f.mu.Lock()
+	appState, appName, lookupDenied := f.appState, f.appName, f.lookupDenied
+	f.mu.Unlock()
+	if appState == "" {
+		appState = "running"
+	}
+	if appName == "" {
+		appName = "acme-b-app"
+	}
+	if lookupDenied && form.Get("InstanceId.1") != "" {
+		w.WriteHeader(http.StatusForbidden)
+		io.WriteString(w, `<Response><Errors><Error><Code>UnauthorizedOperation</Code><Message>denied</Message></Error></Errors></Response>`)
+		return
+	}
 	switch form.Get("Action") {
 	case "DescribeRegions":
 		io.WriteString(w, `<DescribeRegionsResponse`+ns+`><regionInfo>`+
@@ -84,8 +141,8 @@ func (f *fakeAWS) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		items := ""
 		switch region {
 		case "eu-west-1":
-			items = `<item><instanceId>i-0b01</instanceId><instanceState><code>16</code><name>running</name></instanceState>` +
-				`<privateIpAddress>10.1.0.1</privateIpAddress><tagSet><item><key>Name</key><value>acme-b-app</value></item></tagSet></item>`
+			items = `<item><instanceId>i-0b01</instanceId><instanceState><code>16</code><name>` + appState + `</name></instanceState>` +
+				`<privateIpAddress>10.1.0.1</privateIpAddress><tagSet><item><key>Name</key><value>` + appName + `</value></item></tagSet></item>`
 		case "us-east-1":
 			items = `<item><instanceId>i-0b02</instanceId><instanceState><code>80</code><name>stopped</name></instanceState>` +
 				`<tagSet><item><key>Name</key><value>acme-b-legacy</value></item></tagSet></item>`
@@ -103,6 +160,8 @@ func (f *fakeAWS) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// fakeAWSEnv sets up the fleet with the fake as every endpoint. The cache is a few
+// minutes old: within the TTL, past the freshness window.
 func fakeAWSEnv(t *testing.T) *fakeAWS {
 	t.Helper()
 	fleetEnv(t)
@@ -111,7 +170,40 @@ func fakeAWSEnv(t *testing.T) *fakeAWS {
 	srv := httptest.NewServer(f)
 	t.Cleanup(srv.Close)
 	t.Setenv("AWS_ENDPOINT_URL", srv.URL)
+	ageCache(t, 5*time.Minute)
 	return f
+}
+
+// rewriteCache replaces the cache with inv as is. Save keeps the pairs saved since with
+// more recent data (see inventory.Save): a test that ages the cache starts over.
+func rewriteCache(t *testing.T, inv *inventory.Inventory) {
+	t.Helper()
+	os.Remove(inventory.Path())
+	if err := inv.Save(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// ageCache dates every pair of the cache from d ago.
+func ageCache(t *testing.T, d time.Duration) {
+	t.Helper()
+	inv := inventory.Load()
+	for _, tg := range inv.Targets {
+		tg.FetchedAt = time.Now().Add(-d)
+	}
+	rewriteCache(t, inv)
+}
+
+// cacheBillingApp adds acme-b-app (i-0b01, as the fake describes it) to the cache, its
+// pair dated from age ago. The agent is cached as lost, to see the lookup refresh it.
+func cacheBillingApp(t *testing.T, age time.Duration) {
+	t.Helper()
+	inv := inventory.Load()
+	app := instance("acme-b-app", "i-0b01", "acme-billing", "eu-west-1", "running", "")
+	app.PrivateIP, app.Agent = "10.1.0.1", "ConnectionLost"
+	tg := inv.Targets[inventory.TargetKey("acme-billing", "eu-west-1")]
+	tg.Instances, tg.FetchedAt = []inventory.Instance{app}, time.Now().Add(-age)
+	rewriteCache(t, inv)
 }
 
 func TestLsRefresh(t *testing.T) {
@@ -264,9 +356,7 @@ func TestRefreshCommandKeepsTheFilters(t *testing.T) {
 	for _, tg := range inv.Targets {
 		tg.FetchedAt = old
 	}
-	if err := inv.Save(); err != nil {
-		t.Fatal(err)
-	}
+	rewriteCache(t, inv)
 	if _, _, err := runHop(t, "__refresh", "--profile=acme-billing", "--region=us-east-1"); err != nil {
 		t.Fatal(err)
 	}
@@ -292,5 +382,119 @@ func TestPushShowsTheRemoteError(t *testing.T) {
 	}
 	if !strings.Contains(stderr, "sh: /root/app.conf: Permission denied") {
 		t.Errorf("remote error not shown:\n%s", stderr)
+	}
+}
+
+func TestRunWithAFreshCacheQueriesNothing(t *testing.T) {
+	fake := fakeAWSEnv(t)
+	cacheBillingApp(t, 0)
+	// An exact name, and whole words of the name: neither refreshes nor looks up
+	// anything when the pair was queried less than a minute ago.
+	for _, query := range []string{"acme-b-app", "b app"} {
+		out, stderr, err := runHop(t, "run", query, "uptime")
+		if err != nil || out != "up 1 day\n" {
+			t.Fatalf("%s: %v %q\n%s", query, err, out, stderr)
+		}
+	}
+	if calls := fake.inventoryCalls(); len(calls) != 0 {
+		t.Errorf("calls made with a fresh cache: %q", calls)
+	}
+}
+
+func TestRunLooksTheInstanceUpWhenTheCacheIsOld(t *testing.T) {
+	fake := fakeAWSEnv(t)
+	cacheBillingApp(t, 5*time.Minute)
+	out, stderr, err := runHop(t, "run", "acme-b-app", "uptime")
+	if err != nil || out != "up 1 day\n" {
+		t.Fatalf("%v %q\n%s", err, out, stderr)
+	}
+	// That one instance, in its own account: no refresh of any pair.
+	want := []string{"DescribeInstanceInformation i-0b01", "DescribeInstances i-0b01"}
+	if calls := fake.inventoryCalls(); !reflect.DeepEqual(calls, want) {
+		t.Errorf("calls %q, want %q", calls, want)
+	}
+	// The agent state comes from the lookup, not from the cache.
+	if strings.Contains(stderr, "ConnectionLost") {
+		t.Errorf("warned about the cached agent state:\n%s", stderr)
+	}
+}
+
+func TestRunRefusesAnInstanceThatChanged(t *testing.T) {
+	cases := []struct {
+		name          string
+		state, rename string
+		warn, err     string
+	}{
+		{"stopped since", "stopped", "",
+			"hop: acme-b-app (i-0b01, acme-billing, eu-west-1) is now stopped: searching again",
+			"acme-b-app (acme-billing, eu-west-1) is stopped: start it first"},
+		{"renamed since", "", "acme-b-web",
+			"hop: acme-b-app (i-0b01, acme-billing, eu-west-1) is now named acme-b-web: searching again",
+			`no instance matches "acme-b-app"`},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			fake := fakeAWSEnv(t)
+			cacheBillingApp(t, 5*time.Minute)
+			fake.appState, fake.appName = c.state, c.rename
+			_, stderr, err := runHop(t, "run", "acme-b-app", "uptime")
+			if err == nil || !strings.Contains(err.Error(), c.err) {
+				t.Errorf("error %v, want %q", err, c.err)
+			}
+			if !strings.Contains(stderr, c.warn) {
+				t.Errorf("what changed is not said:\n%s", stderr)
+			}
+			fake.mu.Lock()
+			defer fake.mu.Unlock()
+			if len(fake.commands) != 0 {
+				t.Errorf("command sent to an instance that changed: %q", fake.commands)
+			}
+		})
+	}
+}
+
+func TestReachWhenTheLookupFails(t *testing.T) {
+	cases := []struct {
+		name   string
+		why    purpose
+		tty    bool
+		answer string
+		want   string // empty: hop goes ahead
+	}{
+		// The session targets the ID: it fails cleanly if the instance is gone.
+		{"shell", forShell, false, "", ""},
+		{"tunnel", forTunnel, false, "", ""},
+		{"run without a terminal", forRun, false, "",
+			"acme-b-app (i-0b01, acme-billing, eu-west-1) could not be checked again (insufficient permissions; inventory from 5m ago): not acting on it without a terminal to confirm"},
+		{"push without a terminal", forPush, false, "", "not acting on it without a terminal to confirm"},
+		{"run, default answer", forRun, true, "\n", errAborted.Error()},
+		{"run, confirmed", forRun, true, "y\n", ""},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			fake := fakeAWSEnv(t)
+			cacheBillingApp(t, 5*time.Minute)
+			fake.lookupDenied = true
+			terminal(t, c.tty, true)
+			if c.answer != "" {
+				stdin(t, c.answer)
+			}
+			a, err := newApp(filters{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			var in inventory.Instance
+			prompt := capture(t, &os.Stderr, func() { in, _, err = a.reach(context.Background(), []string{"acme-b-app"}, c.why) })
+			if c.want == "" {
+				if err != nil || in.ID != "i-0b01" {
+					t.Errorf("got %s, %v", in.ID, err)
+				}
+			} else if err == nil || !strings.Contains(err.Error(), c.want) {
+				t.Errorf("error %v, want %q", err, c.want)
+			}
+			if c.tty && !strings.Contains(prompt, "could not be checked again (insufficient permissions; inventory from 5m ago). Run the command there? [y/N]") {
+				t.Errorf("prompt %q", prompt)
+			}
+		})
 	}
 }

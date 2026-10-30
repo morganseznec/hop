@@ -30,14 +30,7 @@ belong to the command: "hop run tools ls -la". Linux and macOS instances only.`,
 			if err != nil {
 				return err
 			}
-			in, err := a.resolve(cmd.Context(), args[:1], forRun)
-			if err != nil {
-				return err
-			}
-			if err := posixOnly(in); err != nil {
-				return err
-			}
-			cfg, err := a.awsConfig(cmd.Context(), in)
+			in, cfg, err := a.reach(cmd.Context(), args[:1], forRun)
 			if err != nil {
 				return err
 			}
@@ -95,14 +88,7 @@ func newPush(f *filters) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			in, err := a.resolve(cmd.Context(), args[1:2], forPush)
-			if err != nil {
-				return err
-			}
-			if err := posixOnly(in); err != nil {
-				return err
-			}
-			cfg, err := a.awsConfig(cmd.Context(), in)
+			in, cfg, err := a.reach(cmd.Context(), args[1:2], forPush)
 			if err != nil {
 				return err
 			}
@@ -156,11 +142,7 @@ administrator rights.`,
 			if err != nil {
 				return err
 			}
-			in, err := a.resolve(cmd.Context(), args[:1], forTunnel)
-			if err != nil {
-				return err
-			}
-			cfg, err := a.awsConfig(cmd.Context(), in)
+			in, cfg, err := a.reach(cmd.Context(), args[:1], forTunnel)
 			if err != nil {
 				return err
 			}

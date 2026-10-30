@@ -416,3 +416,29 @@ func TestStrong(t *testing.T) {
 		}
 	}
 }
+
+func TestStrongHybridNode(t *testing.T) {
+	// The agent of a hybrid node declares its name and IP: anyone who controls the
+	// server can claim those of another machine.
+	in := inventory.Instance{ID: "mi-0123456789abcdef0", Name: "acme-onprem-db", Profile: "acme-prod", Region: "eu-west-1", PrivateIP: "192.168.1.5"}
+	cases := []struct {
+		query string
+		want  bool
+	}{
+		{"mi-0123456789abcdef0", true},
+		{"MI-0123456789ABCDEF0", true},
+		{"acme-onprem-db", false},
+		{"192.168.1.5", false},
+		{"onprem db", false},
+		{"mi-0123", false},
+	}
+	for _, c := range cases {
+		if got := Strong(in, c.query); got != c.want {
+			t.Errorf("Strong(%q) = %v, want %v", c.query, got, c.want)
+		}
+	}
+	// Still found, exactly: only acting on it needs a confirmation.
+	if r := Search([]inventory.Instance{in}, "acme-onprem-db", nil, noLabel); !r.Exact || len(r.Matches) != 1 {
+		t.Errorf("%+v", r)
+	}
+}

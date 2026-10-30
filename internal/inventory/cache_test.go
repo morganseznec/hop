@@ -1,6 +1,8 @@
 package inventory
 
 import (
+	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -70,12 +72,151 @@ func TestSaveLoadRoundTrip(t *testing.T) {
 		t.Errorf("temporary files left: %v", left)
 	}
 	// Saving again replaces the file.
-	delete(inv.Targets, TargetKey("globex", "us-east-1"))
+	prod := inv.Targets[TargetKey("acme-prod", "eu-west-1")]
+	prod.FetchedAt = prod.FetchedAt.Add(time.Minute)
+	prod.Instances = prod.Instances[:1]
 	if err := inv.Save(); err != nil {
 		t.Fatal(err)
 	}
-	if got := Load(); len(got.Targets) != 1 {
-		t.Errorf("second save: %d targets", len(got.Targets))
+	if got := Load(); len(got.Targets) != 2 || len(got.Targets[TargetKey("acme-prod", "eu-west-1")].Instances) != 1 {
+		t.Errorf("second save: %+v", got.Targets)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "save.lock")); !os.IsNotExist(err) {
+		t.Errorf("save lock left behind: %v", err)
+	}
+}
+
+func TestSaveMerges(t *testing.T) {
+	tempCacheDir(t)
+	now := time.Now()
+	target := func(profile string, fetched time.Time, names ...string) *Target {
+		tg := &Target{Profile: profile, Region: "eu-west-1", FetchedAt: fetched, AgentsKnown: true}
+		for _, n := range names {
+			tg.Instances = append(tg.Instances, Instance{ID: "i-" + n, Name: n, Profile: profile, Region: "eu-west-1"})
+		}
+		return tg
+	}
+	key := func(profile string) string { return TargetKey(profile, "eu-west-1") }
+	disk := &Inventory{Version: version, Targets: map[string]*Target{
+		key("acme-prod"):    target("acme-prod", now.Add(-time.Hour), "old"),
+		key("acme-data"):    target("acme-data", now.Add(-time.Hour), "old"),
+		key("acme-billing"): target("acme-billing", now.Add(-time.Hour), "old"),
+	}}
+	if err := disk.Save(); err != nil {
+		t.Fatal(err)
+	}
+
+	// Two processes load the same cache.
+	background, foreground := Load(), Load()
+
+	// The foreground one refreshes acme-data, then a login invalidates acme-prod.
+	foreground.Put(target("acme-data", now.Add(-time.Minute), "fresh"))
+	foreground.Invalidate("acme-prod")
+	if err := foreground.Save(); err != nil {
+		t.Fatal(err)
+	}
+
+	// The background one started before the login: its acme-prod query failed on the
+	// expired token. It also refreshed acme-billing, and a pair nobody else has.
+	background.Put(&Target{Profile: "acme-prod", Region: "eu-west-1", Err: "expired", ErrKind: ErrSSOExpired, ErrAt: now.Add(-2 * time.Second)})
+	background.Put(target("acme-billing", now, "fresh"))
+	background.Put(target("globex", now, "fresh"))
+	if err := background.Save(); err != nil {
+		t.Fatal(err)
+	}
+
+	got := Load()
+	if prod := got.Targets[key("acme-prod")]; prod.Err != "" || prod.InvalidatedAt.IsZero() || prod.Fresh(time.Hour, now) {
+		t.Errorf("the slower refresh wrote back the error the login cleared: %+v", prod)
+	}
+	for _, p := range []string{"acme-data", "acme-billing", "globex"} {
+		if tg := got.Targets[key(p)]; tg == nil || len(tg.Instances) != 1 || tg.Instances[0].Name != "fresh" {
+			t.Errorf("%s: the most recent refresh was lost: %+v", p, tg)
+		}
+	}
+	// The process that saved last sees the merged inventory too.
+	mem, _ := json.Marshal(background)
+	saved, _ := json.Marshal(got)
+	if string(mem) != string(saved) {
+		t.Errorf("in memory after the merge:\n got %s\nwant %s", mem, saved)
+	}
+
+	// A refresh that started after the login wins over the invalidation.
+	foreground = Load()
+	foreground.Put(target("acme-prod", time.Now(), "fresh"))
+	if err := foreground.Save(); err != nil {
+		t.Fatal(err)
+	}
+	if prod := Load().Targets[key("acme-prod")]; len(prod.Instances) != 1 || prod.Instances[0].Name != "fresh" {
+		t.Errorf("refresh after the login: %+v", prod)
+	}
+}
+
+func TestSaveMergesConcurrentWriters(t *testing.T) {
+	tempCacheDir(t)
+	// Each process refreshed its own pair, from the same empty cache: none may be lost.
+	var wg sync.WaitGroup
+	errs := make(chan error, 16)
+	for i := range 16 {
+		wg.Go(func() {
+			inv := &Inventory{Version: version, Targets: map[string]*Target{}}
+			inv.Put(&Target{Profile: fmt.Sprintf("acme-%02d", i), Region: "eu-west-1", FetchedAt: time.Now()})
+			errs <- inv.Save()
+		})
+	}
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		if err != nil {
+			t.Error(err)
+		}
+	}
+	if got := Load(); len(got.Targets) != 16 {
+		t.Errorf("%d pairs saved out of 16: concurrent saves overwrote each other", len(got.Targets))
+	}
+}
+
+func TestSaveWaitsForTheSaveLock(t *testing.T) {
+	dir := tempCacheDir(t)
+	os.MkdirAll(dir, 0o700)
+	p := filepath.Join(dir, "save.lock")
+	release, ok := tryLock(p, saveLockStale)
+	if !ok {
+		t.Fatal("lock refused")
+	}
+	done := make(chan error)
+	go func() { done <- sampleInventory().Save() }()
+	select {
+	case err := <-done:
+		t.Fatalf("saved while another process holds the save lock: %v", err)
+	case <-time.After(100 * time.Millisecond):
+	}
+	release()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(saveLockWait):
+		t.Fatal("save still waiting after the lock was released")
+	}
+	if got := Load(); len(got.Targets) != 2 {
+		t.Errorf("after the wait: %+v", got.Targets)
+	}
+
+	// A lock left by a process killed while saving is taken over.
+	os.WriteFile(p, nil, 0o600)
+	old := time.Now().Add(-time.Minute)
+	os.Chtimes(p, old, old)
+	start := time.Now()
+	if err := sampleInventory().Save(); err != nil {
+		t.Fatal(err)
+	}
+	if time.Since(start) > saveLockWait/2 {
+		t.Errorf("an abandoned lock made Save wait %v", time.Since(start))
+	}
+	if _, err := os.Stat(p); !os.IsNotExist(err) {
+		t.Errorf("save lock left behind: %v", err)
 	}
 }
 
@@ -219,10 +360,67 @@ func TestPut(t *testing.T) {
 	t.Run("a success replaces everything", func(t *testing.T) {
 		inv := &Inventory{Targets: map[string]*Target{}}
 		inv.Put(good())
-		fresh := &Target{Profile: "acme-prod", Region: "eu-west-1", FetchedAt: time.Now()}
+		fresh := &Target{Profile: "acme-prod", Region: "eu-west-1", FetchedAt: time.Now(), AgentsKnown: true, Transcript: Transcript{Checked: true}}
 		inv.Put(fresh)
-		if got := inv.Targets[key]; got != fresh || len(got.Instances) != 0 || got.Transcript.Checked {
+		if got := inv.Targets[key]; got != fresh || len(got.Instances) != 0 || got.Transcript.Enabled {
 			t.Errorf("an empty success must replace the old data: %+v", got)
+		}
+	})
+
+	t.Run("a success without the transcript keeps the one read before", func(t *testing.T) {
+		inv := &Inventory{Targets: map[string]*Target{}}
+		inv.Put(good())
+		inv.Put(&Target{Profile: "acme-prod", Region: "eu-west-1", FetchedAt: time.Now(), AgentsKnown: true,
+			Transcript: Transcript{Err: "context deadline exceeded"}})
+		if got := inv.Targets[key].Transcript; !got.Checked || !got.Enabled || got.LogGroup != "/acme/ssm/sessions" {
+			t.Errorf("transcript %+v", got)
+		}
+		// Never read before: nothing to keep.
+		inv = &Inventory{Targets: map[string]*Target{}}
+		inv.Put(&Target{Profile: "acme-prod", Region: "eu-west-1", Transcript: Transcript{Err: "denied"}})
+		inv.Put(&Target{Profile: "acme-prod", Region: "eu-west-1", Transcript: Transcript{Err: "timeout"}})
+		if got := inv.Targets[key].Transcript; got.Checked || got.Err != "timeout" {
+			t.Errorf("transcript %+v", got)
+		}
+	})
+
+	t.Run("a success without the agents keeps the agent of each instance", func(t *testing.T) {
+		inv := &Inventory{Targets: map[string]*Target{}}
+		ping := time.Now().Add(-time.Hour)
+		inv.Put(&Target{Profile: "acme-prod", Region: "eu-west-1", FetchedAt: ping, AgentsKnown: true, Instances: []Instance{
+			{ID: "i-1", Name: "acme-p-tools", Platform: "Amazon Linux", Agent: "Online", LastPing: ping},
+			{ID: "i-2", Name: "acme-p-noagent", Platform: "Linux/UNIX"},
+			{ID: "i-gone", Name: "acme-p-old", Agent: "Online"},
+			{ID: "mi-1", Name: "acme-onprem", State: "running", Agent: "ConnectionLost"},
+		}})
+		// The agents call timed out on a big account.
+		inv.Put(&Target{Profile: "acme-prod", Region: "eu-west-1", FetchedAt: time.Now(), Transcript: Transcript{Checked: true}, Instances: []Instance{
+			{ID: "i-1", Name: "acme-p-tools-renamed", Platform: "Linux/UNIX"},
+			{ID: "i-2", Name: "acme-p-noagent", Platform: "Linux/UNIX"},
+			{ID: "i-3", Name: "acme-p-new", Platform: "Linux/UNIX"},
+		}})
+		got := inv.Targets[key]
+		byID := map[string]Instance{}
+		for _, in := range got.Instances {
+			byID[in.ID] = in
+		}
+		if got.AgentsKnown || len(got.Instances) != 4 {
+			t.Fatalf("%+v", got)
+		}
+		if in := byID["i-1"]; in.Agent != "Online" || !in.LastPing.Equal(ping) || in.Platform != "Amazon Linux" || in.Name != "acme-p-tools-renamed" {
+			t.Errorf("agent of i-1 lost, or EC2 data not updated: %+v", in)
+		}
+		if in := byID["i-2"]; in.Agent != "" || in.Platform != "Linux/UNIX" {
+			t.Errorf("i-2: %+v", in)
+		}
+		if in := byID["i-3"]; in.Agent != "" {
+			t.Errorf("a new instance got an agent: %+v", in)
+		}
+		if _, ok := byID["i-gone"]; ok {
+			t.Error("an EC2 instance gone from EC2 came back")
+		}
+		if in := byID["mi-1"]; in.Agent != "ConnectionLost" || in.Name != "acme-onprem" {
+			t.Errorf("hybrid node lost: %+v", in)
 		}
 	})
 
@@ -276,11 +474,11 @@ func TestInvalidate(t *testing.T) {
 	inv.Put(&Target{Profile: "globex", Region: "eu-west-1", FetchedAt: now})
 	inv.Invalidate("acme-prod")
 	for _, k := range []string{TargetKey("acme-prod", "eu-west-1"), TargetKey("acme-prod", "us-east-1")} {
-		if inv.Targets[k].Fresh(time.Hour, now) {
-			t.Errorf("%s still fresh after Invalidate", k)
+		if tg := inv.Targets[k]; tg.Fresh(time.Hour, now) || tg.InvalidatedAt.Before(now) || !tg.updated().Equal(tg.InvalidatedAt) {
+			t.Errorf("%s after Invalidate: %+v", k, tg)
 		}
 	}
-	if !inv.Targets[TargetKey("globex", "eu-west-1")].Fresh(time.Hour, now) {
+	if tg := inv.Targets[TargetKey("globex", "eu-west-1")]; !tg.Fresh(time.Hour, now) || !tg.InvalidatedAt.IsZero() {
 		t.Error("Invalidate touched another profile")
 	}
 	inv.Invalidate("unknown")

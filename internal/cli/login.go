@@ -76,9 +76,7 @@ itself is handed to "aws sso login", which drives the browser.`,
 				if err := ssoLogin(pt); err != nil {
 					return err
 				}
-				for _, p := range pt.Profiles {
-					a.inv.Invalidate(p)
-				}
+				a.invalidatePortal(pt)
 			}
 			return a.inv.Save()
 		},

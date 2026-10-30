@@ -73,6 +73,56 @@ func TestInstancesDedup(t *testing.T) {
 	}
 }
 
+func TestInstancesDedupPrefersTheHealthyCopy(t *testing.T) {
+	now := time.Now()
+	copyVia := func(profile string, fetched time.Time, err string) *Target {
+		tg := &Target{Profile: profile, Region: "eu-west-1", FetchedAt: fetched, Err: err, Instances: []Instance{
+			{ID: "i-1", Name: "acme-p-tools-" + profile, Profile: profile, Region: "eu-west-1"},
+		}}
+		if err != "" {
+			tg.ErrAt = now
+		}
+		return tg
+	}
+	cases := []struct {
+		name        string
+		sso, keys   *Target
+		wantProfile string
+	}{
+		{"both healthy: the SSO profile, listed first", copyVia("acme-sso", now, ""), copyVia("acme-keys", now.Add(-time.Minute), ""), "acme-sso"},
+		// Pairs of one refresh are queried over a minute or so: no switching on seconds.
+		{"both healthy, the other a little more recent", copyVia("acme-sso", now.Add(-2*time.Minute), ""), copyVia("acme-keys", now, ""), "acme-sso"},
+		{"both healthy, the first one day old", copyVia("acme-sso", now.Add(-24*time.Hour), ""), copyVia("acme-keys", now, ""), "acme-keys"},
+		{"the first in error with day-old data", copyVia("acme-sso", now.Add(-24*time.Hour), "expired"), copyVia("acme-keys", now.Add(-10*time.Minute), ""), "acme-keys"},
+		// The healthy copy wins even when the other one is newer.
+		{"the first in error with recent data", copyVia("acme-sso", now, "expired"), copyVia("acme-keys", now.Add(-time.Hour), ""), "acme-keys"},
+		{"both in error: the most recent data", copyVia("acme-sso", now.Add(-24*time.Hour), "expired"), copyVia("acme-keys", now.Add(-time.Hour), "denied"), "acme-keys"},
+		{"the second in error", copyVia("acme-sso", now.Add(-time.Hour), ""), copyVia("acme-keys", now, "denied"), "acme-sso"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			inv := &Inventory{Targets: map[string]*Target{c.sso.Key(): c.sso, c.keys.Key(): c.keys}}
+			got := inv.Instances([]string{c.sso.Key(), c.keys.Key()})
+			if len(got) != 1 {
+				t.Fatalf("%+v", got)
+			}
+			other := c.sso.Profile
+			if c.wantProfile == c.sso.Profile {
+				other = c.keys.Profile
+			}
+			if got[0].Profile != c.wantProfile || got[0].Name != "acme-p-tools-"+c.wantProfile || len(got[0].AlsoVia) != 1 || got[0].AlsoVia[0] != other {
+				t.Errorf("got %s (%s) also via %v, want %s", got[0].Profile, got[0].Name, got[0].AlsoVia, c.wantProfile)
+			}
+		})
+	}
+}
+
+func TestHybrid(t *testing.T) {
+	if !(Instance{ID: "mi-0123456789abcdef0"}).Hybrid() || (Instance{ID: "i-0123456789abcdef0"}).Hybrid() || (Instance{}).Hybrid() {
+		t.Error("Hybrid")
+	}
+}
+
 func TestParseSessionPrefs(t *testing.T) {
 	on := ParseSessionPrefs(`{"schemaVersion":"1.0","sessionType":"Standard_Stream","inputs":{"s3BucketName":"","cloudWatchLogGroupName":"/acme/ssm/sessions","cloudWatchEncryptionEnabled":true,"kmsKeyId":"alias/x"}}`)
 	if !on.Enabled || !on.Encrypted || on.Destination() != "/acme/ssm/sessions" {
