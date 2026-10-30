@@ -129,11 +129,15 @@ func isExact(in inventory.Instance, q string) bool {
 // Strong reports whether in matches the query well enough to act on it without asking:
 // the exact name, ID or IP, or every word of the query a whole word of the name ("shop
 // app" for acme-p-shop-app). Part of a word, a profile, a region, an environment, a
-// label, or part of an ID or an IP is never enough.
+// label, or part of an ID or an IP is never enough. A hybrid node (mi-) reports its own
+// name and IP to SSM: only its ID, which SSM assigns, is enough.
 func Strong(in inventory.Instance, query string) bool {
 	q := strings.ToLower(strings.TrimSpace(query))
 	if q == "" {
 		return false
+	}
+	if in.Hybrid() {
+		return strings.EqualFold(in.ID, q)
 	}
 	if isExact(in, q) {
 		return true

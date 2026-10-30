@@ -9,6 +9,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -195,7 +196,7 @@ func TestResolve(t *testing.T) {
 			fetchedNow(a)
 			var in inventory.Instance
 			var err error
-			capture(t, &os.Stderr, func() { in, err = a.resolve(context.Background(), c.query, forShell) })
+			capture(t, &os.Stderr, func() { in, _, err = a.resolve(context.Background(), c.query, forShell) })
 			if c.wantErr == nil {
 				if err != nil || in.ID != c.wantID {
 					t.Errorf("got %s, %v; want %s", in.ID, err, c.wantID)
@@ -219,7 +220,7 @@ func TestResolveNoRunningInstance(t *testing.T) {
 	terminal(t, false, false)
 	a := newTestApp(t, nil, filters{profiles: []string{"acme-billing"}}, fleetTargets()...)
 	fetchedNow(a)
-	_, err := a.resolve(context.Background(), nil, forShell)
+	_, _, err := a.resolve(context.Background(), nil, forShell)
 	if err == nil || err.Error() != "no running instance in scope" {
 		t.Errorf("error %v", err)
 	}
@@ -244,7 +245,7 @@ func TestResolveTypoAsksFirst(t *testing.T) {
 			fetchedNow(a)
 			var in inventory.Instance
 			var err error
-			prompt := capture(t, &os.Stderr, func() { in, err = a.resolve(context.Background(), []string{"acme-p-tols"}, forShell) })
+			prompt := capture(t, &os.Stderr, func() { in, _, err = a.resolve(context.Background(), []string{"acme-p-tols"}, forShell) })
 			if !strings.Contains(prompt, `"acme-p-tols" does not exist. Did you mean acme-p-tools (acme-prod, eu-west-1)?`) {
 				t.Errorf("prompt %q", prompt)
 			}
@@ -694,6 +695,8 @@ func TestDecide(t *testing.T) {
 	}
 	ip := run("acme-p-tools")
 	ip.PrivateIP = "10.0.1.21"
+	hybrid := instance("acme-onprem", "mi-0123456789abcdef0", "acme-prod", "eu-west-1", "running", "prod")
+	hybrid.PrivateIP = "192.168.1.5"
 	cases := []struct {
 		name        string
 		matches     []inventory.Instance
@@ -715,6 +718,11 @@ func TestDecide(t *testing.T) {
 		{"running and stopped, no terminal", []inventory.Instance{run("tools"), stopped("tools")}, "tools", false, verdictRefuse},
 		{"stopped only", []inventory.Instance{stopped("tools")}, "tools", true, verdictNotRunning},
 		{"several stopped", []inventory.Instance{stopped("tools"), stopped("tools")}, "tools", false, verdictNotRunning},
+		// A hybrid node declares its own name and IP: only its ID acts on its own.
+		{"hybrid node by name, terminal", []inventory.Instance{hybrid}, "acme-onprem", true, verdictConfirm},
+		{"hybrid node by name, no terminal", []inventory.Instance{hybrid}, "acme-onprem", false, verdictRefuse},
+		{"hybrid node by IP", []inventory.Instance{hybrid}, "192.168.1.5", false, verdictRefuse},
+		{"hybrid node by ID", []inventory.Instance{hybrid}, "mi-0123456789abcdef0", false, verdictAct},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -754,7 +762,7 @@ func TestResolveNeverGuessesWithoutTerminal(t *testing.T) {
 			fetchedNow(a)
 			var in inventory.Instance
 			var err error
-			capture(t, &os.Stderr, func() { in, err = a.resolve(context.Background(), c.query, forRun) })
+			capture(t, &os.Stderr, func() { in, _, err = a.resolve(context.Background(), c.query, forRun) })
 			if err == nil {
 				t.Fatalf("resolved to %s (%s), want an error", in.Name, in.ID)
 			}
@@ -776,10 +784,107 @@ func TestResolveLiteralWithTerminal(t *testing.T) {
 	a := newTestApp(t, nil, filters{}, targets...)
 	fetchedNow(a)
 	var err error
-	out := capture(t, &os.Stderr, func() { _, err = a.resolve(context.Background(), []string{"10.0.1.2"}, forShell) })
+	out := capture(t, &os.Stderr, func() { _, _, err = a.resolve(context.Background(), []string{"10.0.1.2"}, forShell) })
 	// No question and no picker: a partial address is not a candidate.
 	if err == nil || !strings.HasPrefix(err.Error(), "no instance with IP address 10.0.1.2") || strings.Contains(out, "?") {
 		t.Errorf("%v\n%s", err, out)
+	}
+}
+
+func TestResolvePrivateIPAcrossAccounts(t *testing.T) {
+	isolate(t)
+	cases := []struct {
+		name     string
+		why      purpose
+		profiles []string
+		tty      bool
+		answer   string
+		wantID   string
+		wantErr  string
+	}{
+		{"run, no terminal", forRun, nil, false, "", "",
+			"10.0.1.21 is a private IP and 4 profiles are in scope: other accounts may use it too. Narrow with -p acme-prod (no terminal to confirm)"},
+		{"push, no terminal", forPush, nil, false, "", "", "Narrow with -p acme-prod"},
+		{"run, default answer", forRun, nil, true, "\n", "", errAborted.Error()},
+		{"run, confirmed", forRun, nil, true, "y\n", "i-01", ""},
+		// A single profile in scope: the address is unambiguous.
+		{"run, one profile", forRun, []string{"acme-prod"}, false, "", "i-01", ""},
+		// A shell shows where it lands before anything is typed.
+		{"shell, no terminal", forShell, nil, false, "", "i-01", ""},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			terminal(t, c.tty, true)
+			if c.answer != "" {
+				stdin(t, c.answer)
+			}
+			targets := fleetTargets()
+			targets[0].Instances[0].PrivateIP = "10.0.1.21"
+			a := newTestApp(t, nil, filters{profiles: c.profiles}, targets...)
+			fetchedNow(a)
+			var in inventory.Instance
+			var asked bool
+			var err error
+			prompt := capture(t, &os.Stderr, func() { in, asked, err = a.resolve(context.Background(), []string{"10.0.1.21"}, c.why) })
+			if c.wantErr != "" {
+				if err == nil || !strings.Contains(err.Error(), c.wantErr) {
+					t.Errorf("error %v, want %q", err, c.wantErr)
+				}
+			} else if err != nil || in.ID != c.wantID || asked != c.tty {
+				t.Errorf("got %q (asked %v), %v; want %q", in.ID, asked, err, c.wantID)
+			}
+			if c.tty && !strings.Contains(prompt, "10.0.1.21 is acme-p-tools (acme-prod, eu-west-1), but private IPs repeat across accounts. Run the command there? [y/N]") {
+				t.Errorf("prompt %q", prompt)
+			}
+		})
+	}
+}
+
+func TestResolveHybridNode(t *testing.T) {
+	isolate(t)
+	hybrid := instance("acme-onprem", "mi-0123456789abcdef0", "acme-prod", "eu-west-1", "running", "prod")
+	hybrid.PrivateIP = "192.168.1.5"
+	cases := []struct {
+		name    string
+		query   string
+		tty     bool
+		wantErr string
+		prompt  string
+	}{
+		{"name, no terminal", "acme-onprem", false,
+			"acme-onprem (acme-prod, eu-west-1) is a hybrid node: its name and IP are reported by the node itself, give its ID mi-0123456789abcdef0 (no terminal to confirm)", ""},
+		{"IP, no terminal", "192.168.1.5", false, "is a hybrid node", ""},
+		{"ID, no terminal", "mi-0123456789abcdef0", false, "", ""},
+		{"name, terminal", "acme-onprem", true, "",
+			"acme-onprem (mi-0123456789abcdef0, acme-prod, eu-west-1) is a hybrid node: its name and IP are reported by the node itself. Connect? [Y/n]"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			terminal(t, c.tty, true)
+			if c.tty {
+				stdin(t, "\n")
+			}
+			targets := fleetTargets()
+			targets[0].Instances = append(targets[0].Instances, hybrid)
+			a := newTestApp(t, nil, filters{}, targets...)
+			fetchedNow(a)
+			var in inventory.Instance
+			var asked bool
+			var err error
+			prompt := capture(t, &os.Stderr, func() { in, asked, err = a.resolve(context.Background(), []string{c.query}, forShell) })
+			if c.wantErr != "" {
+				if err == nil || !strings.Contains(err.Error(), c.wantErr) {
+					t.Errorf("error %v, want %q", err, c.wantErr)
+				}
+				return
+			}
+			if err != nil || in.ID != hybrid.ID || asked != c.tty {
+				t.Errorf("got %q (asked %v), %v", in.ID, asked, err)
+			}
+			if !strings.Contains(prompt, c.prompt) {
+				t.Errorf("prompt %q", prompt)
+			}
+		})
 	}
 }
 
@@ -806,7 +911,7 @@ func TestResolveConfirmDefaults(t *testing.T) {
 			fetchedNow(a)
 			var in inventory.Instance
 			var err error
-			prompt := capture(t, &os.Stderr, func() { in, err = a.resolve(context.Background(), []string{"acme-p-too"}, c.why) })
+			prompt := capture(t, &os.Stderr, func() { in, _, err = a.resolve(context.Background(), []string{"acme-p-too"}, c.why) })
 			if !strings.Contains(prompt, `"acme-p-too" only partly matches acme-p-tools (acme-prod, eu-west-1). `+c.suffix) {
 				t.Errorf("prompt %q", prompt)
 			}
@@ -822,33 +927,54 @@ func TestResolveConfirmDefaults(t *testing.T) {
 	a := newTestApp(t, nil, filters{}, fleetTargets()...)
 	fetchedNow(a)
 	var err error
-	prompt := capture(t, &os.Stderr, func() { _, err = a.resolve(context.Background(), []string{"acme-p-tols"}, forRun) })
+	prompt := capture(t, &os.Stderr, func() { _, _, err = a.resolve(context.Background(), []string{"acme-p-tols"}, forRun) })
 	if !errors.Is(err, errAborted) || !strings.Contains(prompt, "Did you mean acme-p-tools (acme-prod, eu-west-1)? [y/N]") {
 		t.Errorf("%v\n%s", err, prompt)
 	}
 }
 
-func TestResolveRefreshesBeforeActingOnPartialMatch(t *testing.T) {
+func TestResolveRefreshesOnAMissOnly(t *testing.T) {
 	isolate(t)
 	terminal(t, false, false)
-	// Every pair is fresh: only a partial match triggers a refresh. AWS is out of
-	// reach here, so the refresh fails and the cached instances stay.
-	a := newTestApp(t, nil, filters{}, fleetTargets()...)
-	var in inventory.Instance
-	var err error
-	capture(t, &os.Stderr, func() { in, err = a.resolve(context.Background(), []string{"etl"}, forRun) })
-	if err != nil || in.ID != "i-03" {
-		t.Fatalf("got %s, %v", in.ID, err)
-	}
-	if !a.fetchedAll() {
-		t.Errorf("a partial match was acted on without a refresh: %v", a.fetched)
+	// The cache is a few minutes old: within the TTL, past the freshness window. AWS is
+	// out of reach here, so a refresh fails and the cached instances stay.
+	aged := func() []*inventory.Target {
+		targets := fleetTargets()
+		for _, tg := range targets {
+			tg.FetchedAt = time.Now().Add(-5 * time.Minute)
+		}
+		return targets
 	}
 
-	// An exact name needs no refresh.
-	a = newTestApp(t, nil, filters{}, fleetTargets()...)
-	capture(t, &os.Stderr, func() { in, err = a.resolve(context.Background(), []string{"acme-p-etl"}, forRun) })
+	// Every word a whole word of the name: hop acts on it without refreshing anything
+	// (reach looks that one instance up instead, see TestReach).
+	a := newTestApp(t, nil, filters{}, aged()...)
+	var in inventory.Instance
+	var err error
+	capture(t, &os.Stderr, func() { in, _, err = a.resolve(context.Background(), []string{"etl"}, forRun) })
+	if err != nil || in.ID != "i-03" || len(a.fetched) != 0 {
+		t.Errorf("strong match: %s, %v, fetched %v", in.ID, err, a.fetched)
+	}
+
+	// An exact name neither.
+	a = newTestApp(t, nil, filters{}, aged()...)
+	capture(t, &os.Stderr, func() { in, _, err = a.resolve(context.Background(), []string{"acme-p-etl"}, forRun) })
 	if err != nil || in.ID != "i-03" || len(a.fetched) != 0 {
 		t.Errorf("exact name: %s, %v, fetched %v", in.ID, err, a.fetched)
+	}
+
+	// A partial match is a miss: the pairs past the window are queried again before
+	// hop answers, the others are not.
+	targets := aged()
+	targets[0].FetchedAt = time.Now().Add(-10 * time.Second)
+	a = newTestApp(t, nil, filters{}, targets...)
+	capture(t, &os.Stderr, func() { _, _, err = a.resolve(context.Background(), []string{"et"}, forRun) })
+	if err == nil || !strings.Contains(err.Error(), "only partly matches") {
+		t.Errorf("partial match: %v", err)
+	}
+	want := map[string]bool{"acme-data|eu-west-1": true, "globex|us-east-1": true, "acme-billing|eu-west-1": true}
+	if !reflect.DeepEqual(a.fetched, want) {
+		t.Errorf("pairs queried on a miss: %v, want %v", a.fetched, want)
 	}
 }
 
@@ -877,7 +1003,7 @@ func TestEnsureCanceled(t *testing.T) {
 		t.Errorf("cache written after Ctrl-C: %v", err)
 	}
 	// resolve stops there too, instead of opening the picker.
-	if _, err := a.resolve(ctx, nil, forShell); !errors.Is(err, context.Canceled) {
+	if _, _, err := a.resolve(ctx, nil, forShell); !errors.Is(err, context.Canceled) {
 		t.Errorf("resolve: %v", err)
 	}
 }
@@ -980,6 +1106,94 @@ func TestAWSConfigOffersLoginOnlyForSSO(t *testing.T) {
 	if !strings.Contains(out, "SSO token expired for acme-sso. Sign in again now?") || err == nil || !strings.Contains(err.Error(), "aws CLI not found") {
 		t.Errorf("assumed role on SSO: %v\n%s", err, out)
 	}
+}
+
+// fakeAWSCLI puts on PATH an aws command that succeeds without doing anything: hop
+// believes the sign-in worked.
+func fakeAWSCLI(t *testing.T) {
+	t.Helper()
+	if runtime.GOOS == "windows" {
+		t.Skip("the fake aws command is a shell script")
+	}
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "aws"), []byte("#!/bin/sh\nexit 0\n"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", dir)
+}
+
+// chainTargets has a fresh pair for every profile of chainConfig, the role looping on
+// itself aside.
+func chainTargets() []*inventory.Target {
+	var out []*inventory.Target
+	for _, p := range []string{"acme-prod", "acme-data", "globex", "acme-billing", "acme-admin", "acme-admin-2", "billing-admin", "vault", "vault-admin"} {
+		out = append(out, fresh(p, "eu-west-1"))
+	}
+	return out
+}
+
+func checkInvalidated(t *testing.T, inv *inventory.Inventory) {
+	t.Helper()
+	// The acme-sso profiles, and the roles assumed on top of them.
+	for _, p := range []string{"acme-prod", "acme-data", "acme-admin", "acme-admin-2"} {
+		if tg := inv.Targets[inventory.TargetKey(p, "eu-west-1")]; tg.Fresh(time.Hour, time.Now()) || tg.InvalidatedAt.IsZero() {
+			t.Errorf("%s not invalidated: %+v", p, tg)
+		}
+	}
+	for _, p := range []string{"globex", "acme-billing", "billing-admin", "vault", "vault-admin"} {
+		if tg := inv.Targets[inventory.TargetKey(p, "eu-west-1")]; !tg.Fresh(time.Hour, time.Now()) {
+			t.Errorf("%s invalidated by a login to another portal: %+v", p, tg)
+		}
+	}
+}
+
+func TestInvalidatePortal(t *testing.T) {
+	a := newTestApp(t, nil, filters{}, chainTargets()...)
+	a.files = loadFiles(t, chainConfig, fleetCredentials)
+	pt, ok := a.ssoPortal("acme-admin-2")
+	if !ok {
+		t.Fatal("no portal for acme-admin-2")
+	}
+	a.invalidatePortal(pt)
+	checkInvalidated(t, a.inv)
+}
+
+func TestLoginInvalidatesChainedProfiles(t *testing.T) {
+	fleetEnv(t)
+	terminal(t, false, false)
+	fakeAWSCLI(t)
+	os.WriteFile(awsconf.ConfigPath(), []byte(chainConfig), 0o600)
+	inv := &inventory.Inventory{Version: 1, Targets: map[string]*inventory.Target{}}
+	for _, tg := range chainTargets() {
+		inv.Targets[tg.Key()] = tg
+	}
+	rewriteCache(t, inv)
+
+	_, stderr, err := runHop(t, "login", "acme-sso")
+	if err != nil || !strings.Contains(stderr, "signing in to SSO portal acme-sso (acme-prod, acme-data)") {
+		t.Fatalf("%v\n%s", err, stderr)
+	}
+	checkInvalidated(t, inventory.Load())
+}
+
+func TestAWSConfigLoginInvalidatesChainedProfiles(t *testing.T) {
+	isolate(t)
+	terminal(t, true, true)
+	stdin(t, "y\n")
+	fakeAWSCLI(t)
+	os.WriteFile(awsconf.ConfigPath(), []byte(chainConfig), 0o600)
+	a := newTestApp(t, nil, filters{}, chainTargets()...)
+	a.files = loadFiles(t, chainConfig, fleetCredentials)
+	in := instance("admin-app", "i-22", "acme-admin-2", "eu-west-1", "running", "")
+	var err error
+	out := capture(t, &os.Stderr, func() { _, err = a.awsConfig(context.Background(), in) })
+	// The fake sign-in leaves no token behind: the credentials still fail, after the
+	// cache was invalidated.
+	if !strings.Contains(out, "Sign in again now?") || err == nil || !strings.Contains(err.Error(), "still no credentials for acme-admin-2") {
+		t.Fatalf("%v\n%s", err, out)
+	}
+	checkInvalidated(t, a.inv)
+	checkInvalidated(t, inventory.Load())
 }
 
 func TestAWSConfigWithoutTerminalNeverSignsIn(t *testing.T) {

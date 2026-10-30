@@ -36,8 +36,8 @@ type app struct {
 	inv     *inventory.Inventory
 	recents state.Recents
 	f       filters
-	// fetched holds the profile/region pairs queried during this call. A search that
-	// fails on the others deserves a second try on fresh data.
+	// fetched holds the profile/region pairs queried during this call: they are never
+	// queried twice.
 	fetched map[string]bool
 	// background is set for the detached refresh started by completion: it must not
 	// run credential_process helpers, which may prompt or open a window.
@@ -142,14 +142,8 @@ func (a *app) keys() []string {
 	return out
 }
 
-// fetchedAll reports whether every pair in scope was queried during this call.
-func (a *app) fetchedAll() bool {
-	for _, k := range a.keys() {
-		if !a.fetched[k] {
-			return false
-		}
-	}
-	return true
+func (a *app) pairOf(in inventory.Instance) inventory.Pair {
+	return inventory.Pair{Profile: in.Profile, Region: in.Region, PreferSSO: a.preferSSO(in.Profile)}
 }
 
 // rootProfile follows source_profile from an assume-role profile to the profile that
@@ -174,6 +168,18 @@ func (a *app) ssoPortal(profile string) (awsconf.Portal, bool) {
 	return a.files.PortalOf(p.Name)
 }
 
+// invalidatePortal forces the next refresh of every profile that signs in through the
+// portal: its SSO profiles, and the assumed roles whose source_profile chain ends at
+// one of them. Called after a login, so that none of them keeps reporting the expired
+// token.
+func (a *app) invalidatePortal(pt awsconf.Portal) {
+	for _, p := range a.files.Profiles {
+		if root := a.rootProfile(p.Name); root != nil && root.Kind.IsSSO() && root.PortalKey() == pt.Key {
+			a.inv.Invalidate(p.Name)
+		}
+	}
+}
+
 // usesProcess reports whether a profile gets its credentials from a credential_process,
 // directly or through the source_profile of an assumed role.
 func (a *app) usesProcess(profile string) bool {
@@ -181,10 +187,19 @@ func (a *app) usesProcess(profile string) bool {
 	return p != nil && p.Kind == awsconf.KindProcess
 }
 
-// stale returns the pairs to query: those out of date, or all of them with force. A
-// pair already queried during this call is never queried again, and a background
-// refresh leaves out credential_process profiles.
-func (a *app) stale(force bool) []inventory.Pair {
+// freshWindow is how old the inventory of a pair may be for hop to act on it as is.
+// Past it, a search that misses queries the pair again (see resolve), and an instance
+// found there is looked up again before hop acts on it (see verify).
+const freshWindow = time.Minute
+
+// stale returns the pairs to query: those older than the TTL, or all of them with
+// force.
+func (a *app) stale(force bool) []inventory.Pair { return a.olderThan(a.cfg.TTL(), force) }
+
+// olderThan returns the pairs in scope whose data is older than maxAge, or all of them
+// with force. A pair already queried during this call is never queried again, and a
+// background refresh leaves out credential_process profiles.
+func (a *app) olderThan(maxAge time.Duration, force bool) []inventory.Pair {
 	now := time.Now()
 	var todo []inventory.Pair
 	for _, p := range a.pairs() {
@@ -193,7 +208,7 @@ func (a *app) stale(force bool) []inventory.Pair {
 			continue
 		}
 		t, ok := a.inv.Targets[key]
-		if force || !ok || !t.Fresh(a.cfg.TTL(), now) {
+		if force || !ok || !t.Fresh(maxAge, now) {
 			todo = append(todo, p)
 		}
 	}
@@ -201,10 +216,15 @@ func (a *app) stale(force bool) []inventory.Pair {
 }
 
 // ensure refreshes stale profile/region pairs (or all of them with force) and saves the
-// cache. When ctx is canceled (Ctrl-C), nothing is recorded: the pairs cut short are
-// not errors, and the caller gets the context error.
+// cache.
 func (a *app) ensure(ctx context.Context, force bool) error {
-	todo := a.stale(force)
+	return a.refresh(ctx, a.stale(force))
+}
+
+// refresh queries the given pairs and saves the cache. When ctx is canceled (Ctrl-C),
+// nothing is recorded: the pairs cut short are not errors, and the caller gets the
+// context error.
+func (a *app) refresh(ctx context.Context, todo []inventory.Pair) error {
 	if len(todo) == 0 {
 		return nil
 	}
@@ -396,9 +416,13 @@ const (
 	forPush
 )
 
-// confirmDefault is the answer Enter gives when hop asks about a loose match. run and
-// push change the machine with nobody watching the result: for them, a doubt is a no.
-func (p purpose) confirmDefault() bool { return p == forShell || p == forTunnel }
+// sendsCommand reports whether the purpose changes the machine with nobody watching
+// the result (run and push, through AWS-RunShellScript).
+func (p purpose) sendsCommand() bool { return p == forRun || p == forPush }
+
+// confirmDefault is the answer Enter gives when hop asks about a loose match. For run
+// and push, a doubt is a no.
+func (p purpose) confirmDefault() bool { return !p.sendsCommand() }
 
 func (p purpose) question() string {
 	switch p {
@@ -427,7 +451,8 @@ const (
 // decide is the rule resolve follows. It acts without asking only when a single
 // instance matches, stopped ones included, and that instance is running and strongly
 // matched (see match.Strong): a partial name, a profile or a region never connects on
-// its own, and neither does a name that also belongs to a stopped instance.
+// its own, and neither does a name that also belongs to a stopped instance, or the
+// name or IP of a hybrid node.
 func decide(matches []inventory.Instance, query string, interactive bool) verdict {
 	running := 0
 	for _, in := range matches {
@@ -451,31 +476,35 @@ func decide(matches []inventory.Instance, query string, interactive bool) verdic
 }
 
 // resolve turns what was typed into an instance: directly for a single strong match,
-// after a question or through the picker otherwise (see decide).
-func (a *app) resolve(ctx context.Context, args []string, why purpose) (inventory.Instance, error) {
+// after a question or through the picker otherwise (see decide). asked reports that
+// the user chose the instance, rather than hop on its own.
+func (a *app) resolve(ctx context.Context, args []string, why purpose) (in inventory.Instance, asked bool, err error) {
 	if err := a.ensure(ctx, a.f.refresh); err != nil {
-		return inventory.Instance{}, err
+		return inventory.Instance{}, false, err
 	}
 	query := strings.TrimSpace(strings.Join(args, " "))
 	if query == "" {
 		running := a.instances(false)
 		if len(running) == 0 {
 			a.reportProblems()
-			return inventory.Instance{}, errors.New("no running instance in scope")
+			return inventory.Instance{}, false, errors.New("no running instance in scope")
 		}
-		return a.pick(match.Search(running, "", a.recents, a.cfg.Label).Matches, "")
+		in, err := a.pick(match.Search(running, "", a.recents, a.cfg.Label).Matches, "")
+		return in, true, err
 	}
 
 	interactive := stdinTTY && stderrTTY
 	res := match.Search(a.instances(true), query, a.recents, a.cfg.Label)
 	v := decide(res.Matches, query, interactive)
-	// The cache may predate the instance, or its state. Anything short of an exact
-	// match on a running instance is checked again on fresh data, except a word search
-	// that opens the picker: there the user chooses from what is shown.
-	retry := v == verdictNotRunning || (!res.Exact && (res.Fuzzy || v != verdictPick))
-	if retry && !a.fetchedAll() {
-		if err := a.ensure(ctx, true); err != nil {
-			return inventory.Instance{}, err
+	// A miss may come from a cache that predates the instance, or its state: the pairs
+	// not refreshed within freshWindow are queried again, and the search runs once
+	// more. A strong match is not a miss (reach looks that one instance up before
+	// acting), and neither is a word search that opens the picker: there the user
+	// chooses from what is shown.
+	miss := v == verdictNotRunning || (!res.Exact && v != verdictAct && (res.Fuzzy || v != verdictPick))
+	if miss {
+		if err := a.refresh(ctx, a.olderThan(freshWindow, false)); err != nil {
+			return inventory.Instance{}, false, err
 		}
 		res = match.Search(a.instances(true), query, a.recents, a.cfg.Label)
 		v = decide(res.Matches, query, interactive)
@@ -501,43 +530,170 @@ func (a *app) resolve(ctx context.Context, args []string, why purpose) (inventor
 			for i := 0; i < len(res.Matches) && i < 3; i++ {
 				names = append(names, res.Matches[i].Name)
 			}
-			return inventory.Instance{}, notFound(names)
+			return inventory.Instance{}, false, notFound(names)
 		case verdictConfirm:
 			in := res.Matches[0]
 			if !confirm(fmt.Sprintf("\"%s\" does not exist. Did you mean %s (%s, %s)?", query, in.Name, in.Profile, in.Region), why.confirmDefault()) {
-				return inventory.Instance{}, errAborted
+				return inventory.Instance{}, false, errAborted
 			}
-			return in, nil
+			return in, true, nil
 		}
-		return a.pickRunning(res.Matches, fmt.Sprintf("\"%s\" does not exist, close matches", query))
+		in, err := a.pickRunning(res.Matches, fmt.Sprintf("\"%s\" does not exist, close matches", query))
+		return in, true, err
 	}
 
 	switch v {
 	case verdictNone:
-		return inventory.Instance{}, notFound(res.Suggestions)
+		return inventory.Instance{}, false, notFound(res.Suggestions)
 	case verdictNotRunning:
-		return inventory.Instance{}, notRunning(query, res.Matches)
+		return inventory.Instance{}, false, notRunning(query, res.Matches)
 	case verdictAct:
-		return res.Matches[0], nil
+		in := res.Matches[0]
+		// A private IP is unique within a network, not across accounts: with several
+		// profiles in scope, the address may also belong to a machine of another
+		// account, absent from the inventory or not. run and push ask first.
+		if n := len(a.selectedProfiles()); res.Literal == "IP address" && why.sendsCommand() && n > 1 {
+			if !interactive {
+				return inventory.Instance{}, false, fmt.Errorf("%s is a private IP and %d profiles are in scope: other accounts may use it too. Narrow with -p %s (no terminal to confirm)",
+					query, n, in.Profile)
+			}
+			if !confirm(fmt.Sprintf("%s is %s (%s, %s), but private IPs repeat across accounts. %s", query, in.Name, in.Profile, in.Region, why.question()), false) {
+				return inventory.Instance{}, false, errAborted
+			}
+			return in, true, nil
+		}
+		return in, false, nil
 	case verdictRefuse:
 		if len(res.Matches) == 1 {
 			in := res.Matches[0]
-			return inventory.Instance{}, fmt.Errorf("\"%s\" only partly matches %s (%s, %s): give its full name, ID or IP, or narrow with -p, -r or -e (no terminal to confirm)",
+			// Only a hybrid node matches exactly without matching strongly.
+			if res.Exact {
+				return inventory.Instance{}, false, fmt.Errorf("%s (%s, %s) is a hybrid node: its name and IP are reported by the node itself, give its ID %s (no terminal to confirm)",
+					in.Name, in.Profile, in.Region, in.ID)
+			}
+			return inventory.Instance{}, false, fmt.Errorf("\"%s\" only partly matches %s (%s, %s): give its full name, ID or IP, or narrow with -p, -r or -e (no terminal to confirm)",
 				query, in.Name, in.Profile, in.Region)
 		}
-		return inventory.Instance{}, severalMatch(res.Matches)
+		return inventory.Instance{}, false, severalMatch(res.Matches)
 	case verdictConfirm:
 		in := res.Matches[0]
-		if !confirm(fmt.Sprintf("\"%s\" only partly matches %s (%s, %s). %s", query, in.Name, in.Profile, in.Region, why.question()), why.confirmDefault()) {
-			return inventory.Instance{}, errAborted
+		question := fmt.Sprintf("\"%s\" only partly matches %s (%s, %s). %s", query, in.Name, in.Profile, in.Region, why.question())
+		if res.Exact { // a hybrid node, as above
+			question = fmt.Sprintf("%s (%s, %s, %s) is a hybrid node: its name and IP are reported by the node itself. %s", in.Name, in.ID, in.Profile, in.Region, why.question())
 		}
-		return in, nil
+		if !confirm(question, why.confirmDefault()) {
+			return inventory.Instance{}, false, errAborted
+		}
+		return in, true, nil
 	}
 	header := fmt.Sprintf("%d instances for \"%s\"", len(res.Matches), query)
 	if res.Exact {
 		header = fmt.Sprintf("\"%s\" exists %d times", query, len(res.Matches))
 	}
-	return a.pickRunning(res.Matches, header)
+	in, err = a.pickRunning(res.Matches, header)
+	return in, true, err
+}
+
+// reach resolves what was typed (see resolve) and returns the instance with the
+// credentials to act on it (see awsConfig). An instance whose data is older than
+// freshWindow is looked up again first (see verify): if it is no longer the one meant,
+// hop says what changed and searches once more, with the pair of that instance
+// refreshed.
+func (a *app) reach(ctx context.Context, args []string, why purpose) (inventory.Instance, aws.Config, error) {
+	query := strings.TrimSpace(strings.Join(args, " "))
+	for retried := false; ; retried = true {
+		in, asked, err := a.resolve(ctx, args, why)
+		if err != nil {
+			return in, aws.Config{}, err
+		}
+		// A Windows instance is refused before signing in or looking it up.
+		if why.sendsCommand() {
+			if err := posixOnly(in); err != nil {
+				return in, aws.Config{}, err
+			}
+		}
+		cfg, err := a.awsConfig(ctx, in)
+		if err != nil {
+			return in, cfg, err
+		}
+		cur, changed, err := a.verify(ctx, cfg, in, query, why, asked)
+		if err != nil || changed == "" {
+			return cur, cfg, err
+		}
+		if retried {
+			return in, cfg, errors.New(changed)
+		}
+		warn("%s: searching again", changed)
+		if err := a.refresh(ctx, []inventory.Pair{a.pairOf(in)}); err != nil {
+			return in, cfg, err
+		}
+	}
+}
+
+// verify makes sure that the instance is still the one meant, when the inventory of
+// its pair is older than freshWindow and was not queried during this call: it is
+// looked up again in its account, and the instance returned is the one AWS describes
+// now. changed says what differs when it is gone, no longer running, or no longer
+// matches what was typed.
+//
+// When the lookup fails, a shell or a tunnel goes ahead: the session targets the ID and
+// fails cleanly if the instance is gone. run and push, which act with nobody watching,
+// turn a choice hop made on its own into a question, and refuse without a terminal.
+func (a *app) verify(ctx context.Context, cfg aws.Config, in inventory.Instance, query string, why purpose, asked bool) (cur inventory.Instance, changed string, err error) {
+	var fetchedAt time.Time
+	t := a.target(in)
+	if t != nil {
+		fetchedAt = t.FetchedAt
+	}
+	if time.Since(fetchedAt) < freshWindow || (t != nil && t.Err == "" && a.fetched[t.Key()]) {
+		return in, "", nil
+	}
+	lctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	cur, found, err := inventory.Lookup(lctx, cfg, in)
+	cancel()
+	if ctx.Err() != nil {
+		return in, "", ctx.Err()
+	}
+	where := fmt.Sprintf("%s (%s, %s, %s)", in.Name, in.ID, in.Profile, in.Region)
+	switch {
+	case err != nil:
+		if !why.sendsCommand() || asked {
+			return in, "", nil
+		}
+		doubt := fmt.Sprintf("%s could not be checked again (%s; inventory from %s)", where, inventory.Classify(err).Explain(), ago(fetchedAt))
+		if !stdinTTY || !stderrTTY {
+			return in, "", fmt.Errorf("%s: not acting on it without a terminal to confirm", doubt)
+		}
+		if !confirm(doubt+". "+why.question(), false) {
+			return in, "", errAborted
+		}
+		return in, "", nil
+	case !found:
+		return in, where + " no longer exists", nil
+	case !cur.Running():
+		return in, where + " is now " + cur.State, nil
+	case !a.stillMatches(cur, query, asked):
+		switch {
+		case cur.Name != in.Name:
+			return in, where + " is now named " + cur.Name, nil
+		case cur.PrivateIP != in.PrivateIP:
+			return in, fmt.Sprintf("%s now has the private IP %q", where, cur.PrivateIP), nil
+		}
+		return in, fmt.Sprintf("%s no longer matches \"%s\"", where, query), nil
+	}
+	return cur, "", nil
+}
+
+// stillMatches reports whether the instance, as AWS describes it now, still answers
+// what was typed: as strongly as before when hop chose it on its own.
+func (a *app) stillMatches(in inventory.Instance, query string, asked bool) bool {
+	switch {
+	case query == "":
+		return true
+	case !asked:
+		return match.Strong(in, query)
+	}
+	return len(match.Search([]inventory.Instance{in}, query, nil, a.cfg.Label).Matches) > 0
 }
 
 // pickRunning opens the picker over every candidate, stopped ones included so that
@@ -601,11 +757,7 @@ func (a *app) awsConfig(ctx context.Context, in inventory.Instance) (aws.Config,
 	if err := ssoLogin(pt); err != nil {
 		return cfg, err
 	}
-	for _, p := range pt.Profiles {
-		a.inv.Invalidate(p)
-	}
-	// An assumed role signs in through the portal without being one of its profiles.
-	a.inv.Invalidate(in.Profile)
+	a.invalidatePortal(pt)
 	if err := a.inv.Save(); err != nil {
 		warn("cache not saved: %v", err)
 	}

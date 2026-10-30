@@ -100,11 +100,7 @@ func connect(ctx context.Context, f filters, args []string) error {
 	if err != nil {
 		return err
 	}
-	in, err := a.resolve(ctx, args, forShell)
-	if err != nil {
-		return err
-	}
-	cfg, err := a.awsConfig(ctx, in)
+	in, cfg, err := a.reach(ctx, args, forShell)
 	if err != nil {
 		return err
 	}
