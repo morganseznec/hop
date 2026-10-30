@@ -4,11 +4,20 @@ hop opens shells on real servers, so security reports are welcome and handled fi
 
 ## Reporting a vulnerability
 
-Please do not open a public issue. Use GitHub's private vulnerability reporting
-instead: **Security** tab of this repository, then **Report a vulnerability**.
+Please do not open a public issue. Report it privately through GitHub:
+<https://github.com/morganseznec/hop/security/advisories/new> (or the **Security** tab
+of this repository, then **Report a vulnerability**).
 
 Include what you found, how to reproduce it, and the version (`hop --version`).
-You should get an answer within a week.
+
+What to expect:
+
+- an acknowledgement within 7 days;
+- a fix or a mitigation plan within 30 days for confirmed issues, released as a new
+  version and announced in a GitHub security advisory;
+- credit in the advisory, unless you prefer to stay anonymous.
+
+Only the latest release receives security fixes.
 
 ## Scope
 
