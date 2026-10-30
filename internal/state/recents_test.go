@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"testing"
 	"time"
 )
@@ -17,8 +18,8 @@ func tempStateDir(t *testing.T) string {
 
 func TestDir(t *testing.T) {
 	stateDir := tempStateDir(t)
-	if got := path(); got != filepath.Join(stateDir, "recents.json") {
-		t.Errorf("with XDG_STATE_HOME: %s", got)
+	if got, err := dir(); err != nil || got != stateDir {
+		t.Errorf("with XDG_STATE_HOME: %s, %v", got, err)
 	}
 
 	home := t.TempDir()
@@ -30,8 +31,60 @@ func TestDir(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		want = filepath.Join(home, "AppData", "Local", "hop")
 	}
-	if got := dir(); got != want {
-		t.Errorf("without XDG_STATE_HOME: %s, want %s", got, want)
+	if got, err := dir(); err != nil || got != want {
+		t.Errorf("without XDG_STATE_HOME: %s, %v, want %s", got, err, want)
+	}
+}
+
+// noHome unsets every variable a home or state folder could come from, and moves to
+// an empty working directory, where nothing must be written.
+func noHome(t *testing.T) string {
+	t.Helper()
+	for _, k := range []string{"HOME", "USERPROFILE", "home", "XDG_STATE_HOME", "LOCALAPPDATA", "APPDATA"} {
+		t.Setenv(k, "")
+	}
+	wd := t.TempDir()
+	t.Chdir(wd)
+	return wd
+}
+
+func TestWithoutHome(t *testing.T) {
+	wd := noHome(t)
+	if d, err := dir(); err == nil || !strings.Contains(err.Error(), "home directory is not set") {
+		t.Errorf("dir() = %q, %v: want an error", d, err)
+	}
+	if r := LoadRecents(); r == nil || len(r) != 0 {
+		t.Errorf("LoadRecents: %v", r)
+	}
+	r := Recents{}
+	if err := r.Touch("acme-prod|eu-west-1|i-1"); err == nil || !strings.Contains(err.Error(), "XDG_STATE_HOME") {
+		t.Errorf("Touch: %v", err)
+	}
+	if left, _ := os.ReadDir(wd); len(left) != 0 {
+		t.Errorf("written relative to the working directory: %v", left)
+	}
+}
+
+func TestTouchReplacesTheFileAtomically(t *testing.T) {
+	d := tempStateDir(t)
+	if err := (Recents{}).Touch("acme-prod|eu-west-1|i-1"); err != nil {
+		t.Fatal(err)
+	}
+	// A rename replaces a read-only file; writing into it in place would fail. Root
+	// writes anyway, so the check only tells the two apart for other users.
+	if runtime.GOOS != "windows" {
+		os.Chmod(filepath.Join(d, "recents.json"), 0o400)
+	}
+	r := LoadRecents()
+	if err := r.Touch("globex|us-east-1|i-2"); err != nil {
+		t.Fatalf("Touch over a read-only file: %v", err)
+	}
+	if got := LoadRecents(); len(got) != 2 {
+		t.Errorf("after the second Touch: %v", got)
+	}
+	entries, _ := os.ReadDir(d)
+	if len(entries) != 1 || entries[0].Name() != "recents.json" {
+		t.Errorf("temporary files left behind: %v", entries)
 	}
 }
 
@@ -121,13 +174,15 @@ func TestTouchFilePermissions(t *testing.T) {
 }
 
 func TestTouchUnwritableFolder(t *testing.T) {
-	// The state is a convenience: a folder that cannot be created is not an error,
-	// and the in-memory map is still updated.
+	// A folder that cannot be created is reported, and the in-memory map is still
+	// updated.
 	blocker := filepath.Join(t.TempDir(), "file")
 	os.WriteFile(blocker, nil, 0o600)
 	t.Setenv("XDG_STATE_HOME", blocker)
 	r := Recents{}
-	r.Touch("acme-prod|eu-west-1|i-1")
+	if err := r.Touch("acme-prod|eu-west-1|i-1"); err == nil {
+		t.Error("want an error")
+	}
 	if _, ok := r["acme-prod|eu-west-1|i-1"]; !ok {
 		t.Error("in-memory entry lost")
 	}

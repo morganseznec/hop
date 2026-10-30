@@ -3,10 +3,13 @@ package inventory
 import (
 	"encoding/json"
 	"fmt"
+	"maps"
 	"os"
 	"path/filepath"
 	"reflect"
 	"runtime"
+	"slices"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -19,10 +22,20 @@ func tempCacheDir(t *testing.T) string {
 	return filepath.Join(base, "hop")
 }
 
+// cacheFile returns the cache file, failing the test without one.
+func cacheFile(t *testing.T) string {
+	t.Helper()
+	p, err := Path()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return p
+}
+
 func TestCacheDir(t *testing.T) {
 	dir := tempCacheDir(t)
-	if CacheDir() != dir || Path() != filepath.Join(dir, "inventory.json") {
-		t.Errorf("with XDG_CACHE_HOME: %s, %s", CacheDir(), Path())
+	if d, err := CacheDir(); err != nil || d != dir || cacheFile(t) != filepath.Join(dir, "inventory.json") {
+		t.Errorf("with XDG_CACHE_HOME: %s, %v, %s", d, err, cacheFile(t))
 	}
 	home := t.TempDir()
 	t.Setenv("XDG_CACHE_HOME", "")
@@ -33,8 +46,57 @@ func TestCacheDir(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		want = filepath.Join(home, "AppData", "Local", "hop")
 	}
-	if got := CacheDir(); got != want {
-		t.Errorf("without XDG_CACHE_HOME: %s, want %s", got, want)
+	if got, err := CacheDir(); err != nil || got != want {
+		t.Errorf("without XDG_CACHE_HOME: %s, %v, want %s", got, err, want)
+	}
+}
+
+func TestCacheWithoutHome(t *testing.T) {
+	for _, k := range []string{"HOME", "USERPROFILE", "home", "XDG_CACHE_HOME", "LOCALAPPDATA", "APPDATA"} {
+		t.Setenv(k, "")
+	}
+	wd := t.TempDir()
+	t.Chdir(wd)
+	if d, err := CacheDir(); err == nil || !strings.Contains(err.Error(), "home directory is not set") {
+		t.Errorf("CacheDir() = %q, %v: want an error", d, err)
+	}
+	if inv := Load(); len(inv.Targets) != 0 {
+		t.Errorf("Load: %+v", inv)
+	}
+	if err := sampleInventory().Save(); err == nil || !strings.Contains(err.Error(), "XDG_CACHE_HOME") {
+		t.Errorf("Save: %v", err)
+	}
+	release, ok := Lock()
+	release()
+	if !ok {
+		t.Error("Lock must let the refresh go ahead")
+	}
+	if left, _ := os.ReadDir(wd); len(left) != 0 {
+		t.Errorf("written relative to the working directory: %v", left)
+	}
+}
+
+func TestSaveDropsRemovedProfiles(t *testing.T) {
+	tempCacheDir(t)
+	if err := sampleInventory().Save(); err != nil {
+		t.Fatal(err)
+	}
+	// globex is gone from the AWS files: its pair is dropped, even though the cache on
+	// disk still has it and Save merges with the disk.
+	inv := Load()
+	inv.Retain([]string{"acme-prod", "acme-data"})
+	if err := inv.Save(); err != nil {
+		t.Fatal(err)
+	}
+	for _, got := range []*Inventory{inv, Load()} {
+		if _, ok := got.Targets[TargetKey("globex", "us-east-1")]; ok || len(got.Targets) != 1 {
+			t.Errorf("targets after Retain: %v", slices.Sorted(maps.Keys(got.Targets)))
+		}
+	}
+	// Without Retain, nothing is dropped.
+	inv = sampleInventory()
+	if err := inv.Save(); err != nil || len(Load().Targets) != 2 {
+		t.Errorf("without Retain: %v, %v", err, Load().Targets)
 	}
 }
 
@@ -228,7 +290,7 @@ func TestSavePermissions(t *testing.T) {
 	if err := sampleInventory().Save(); err != nil {
 		t.Fatal(err)
 	}
-	for _, p := range []string{dir, Path()} {
+	for _, p := range []string{dir, cacheFile(t)} {
 		st, err := os.Stat(p)
 		if err != nil {
 			t.Fatal(err)
@@ -256,7 +318,7 @@ func TestLoadRebuilds(t *testing.T) {
 			dir := tempCacheDir(t)
 			if c.content != "" {
 				os.MkdirAll(dir, 0o700)
-				os.WriteFile(Path(), []byte(c.content), 0o600)
+				os.WriteFile(cacheFile(t), []byte(c.content), 0o600)
 			}
 			inv := Load()
 			if inv.Version != version || inv.Targets == nil || len(inv.Targets) != 0 {
@@ -271,7 +333,7 @@ func TestLoadRebuilds(t *testing.T) {
 func TestSaveRemovesTempFileOnFailure(t *testing.T) {
 	// A non-empty folder in place of inventory.json: the rename fails.
 	dir := tempCacheDir(t)
-	if err := os.MkdirAll(filepath.Join(Path(), "blocker"), 0o700); err != nil {
+	if err := os.MkdirAll(filepath.Join(cacheFile(t), "blocker"), 0o700); err != nil {
 		t.Fatal(err)
 	}
 	if err := sampleInventory().Save(); err == nil {

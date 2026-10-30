@@ -45,6 +45,9 @@ type app struct {
 }
 
 func newApp(f filters) (*app, error) {
+	if err := f.check(); err != nil {
+		return nil, err
+	}
 	files, err := awsconf.Load()
 	if err != nil {
 		return nil, fmt.Errorf("reading AWS configuration: %w", err)
@@ -54,10 +57,50 @@ func newApp(f filters) (*app, error) {
 		return nil, err
 	}
 	a := &app{files: files, cfg: cfg, inv: inventory.Load(), recents: state.LoadRecents(), f: f}
+	// The pairs of a profile removed from the AWS files leave the cache at the next save.
+	a.inv.Retain(files.Names())
 	if err := a.checkProfiles(); err != nil {
 		return nil, err
 	}
 	return a, nil
+}
+
+// check validates -e and -r before anything is read or queried, and puts -e in the
+// form DeriveEnv gives: -e staging selects the instances listed as test.
+func (f *filters) check() error {
+	if f.env != "" {
+		env, ok := inventory.NormalizeEnv(f.env)
+		if !ok {
+			return fmt.Errorf("unknown environment %q: use prod (or %s) or test (or %s)",
+				f.env, strings.Join(inventory.EnvWords("prod"), ", "), strings.Join(inventory.EnvWords("test"), ", "))
+		}
+		f.env = env
+	}
+	for _, r := range f.regions {
+		if err := checkRegion(r); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// regionName is the form of region names in every AWS partition: eu-west-1,
+// cn-north-1, us-gov-west-1, us-isob-east-1, eusc-de-east-1.
+var regionName = regexp.MustCompile(`^[a-z]{2,4}(-[a-z]+){1,2}-[0-9]{1,2}$`)
+
+// checkRegion refuses a -r that cannot be a region: queried as is, it would fail on
+// every profile with an endpoint error.
+func checkRegion(r string) error {
+	if regionName.MatchString(r) {
+		return nil
+	}
+	if az := strings.TrimRight(r, "abcdefghijklmnopqrstuvwxyz"); az != r && regionName.MatchString(az) {
+		return fmt.Errorf("invalid region %q: that is an availability zone, its region is %s", r, az)
+	}
+	if lower := strings.ToLower(r); lower != r && regionName.MatchString(lower) {
+		return fmt.Errorf("invalid region %q: region names are lower case (%s)", r, lower)
+	}
+	return fmt.Errorf("invalid region %q: expected a region name such as eu-west-1 or us-gov-west-1", r)
 }
 
 // selectedProfiles applies -p, or else include/exclude from the configuration. SSO
@@ -94,6 +137,9 @@ func matchAny(patterns []string, name string) bool {
 
 // checkProfiles rejects a -p that matches nothing, suggesting the closest profile.
 func (a *app) checkProfiles() error {
+	if len(a.f.profiles) > 0 && len(a.files.Names()) == 0 {
+		return a.noProfiles()
+	}
 	for _, want := range a.f.profiles {
 		found := false
 		for _, p := range a.files.Profiles {
@@ -113,16 +159,84 @@ func (a *app) checkProfiles() error {
 	return nil
 }
 
-func (a *app) pairs() []inventory.Pair {
+// noProfiles is the error of a first run: no profile with credentials in the AWS
+// files, or no files at all.
+func (a *app) noProfiles() error {
+	return fmt.Errorf(`no AWS profile with credentials in %s or %s: create one with "aws configure sso", then run hop ls`,
+		a.files.ConfigPath, a.files.CredentialsPath)
+}
+
+// checkScope explains an empty scope before anything is queried: no profile with
+// credentials at all (a first run), or none left by -p, or by include and exclude in
+// hop's configuration.
+func (a *app) checkScope() error {
+	if len(a.selectedProfiles()) > 0 {
+		return nil
+	}
+	usable := a.files.Names()
+	if len(usable) == 0 {
+		return a.noProfiles()
+	}
+	if len(a.f.profiles) > 0 {
+		// checkProfiles made sure that -p matches profiles: none with credentials.
+		var matched []string
+		for _, p := range a.files.Profiles {
+			if matchAny(a.f.profiles, p.Name) {
+				matched = append(matched, p.Name)
+			}
+		}
+		return fmt.Errorf("-p %s matches only profiles without credentials (%s)", strings.Join(a.f.profiles, ","), strings.Join(matched, ", "))
+	}
+	where := "hop's configuration"
+	if p, err := config.Path(); err == nil {
+		where = p
+	}
+	return fmt.Errorf("include and exclude in %s leave none of the %s with credentials in scope", where, plural(len(usable), "profile"))
+}
+
+// emptyReason says which filter left nothing to show when the cache holds instances
+// for the profiles in scope: -r, -e, or the state when all is false (stopped
+// instances, which hop ls --all lists). It returns "" when there is nothing to filter.
+func (a *app) emptyReason(all bool) string {
+	cached := a.inv.Instances(a.keys())
+	if len(cached) == 0 {
+		if len(a.f.regions) == 0 {
+			return ""
+		}
+		// What the same profiles hold in the regions they are queried in without -r.
+		var keys []string
+		for _, p := range a.pairsIn(nil) {
+			keys = append(keys, inventory.TargetKey(p.Profile, p.Region))
+		}
+		if n := len(a.filter(a.inv.Instances(keys), all)); n > 0 {
+			return fmt.Sprintf("-r %s filters out %s in the profiles' own regions", strings.Join(a.f.regions, ","), plural(n, "instance"))
+		}
+		return ""
+	}
+	inEnv := a.filter(cached, true)
+	switch {
+	case len(inEnv) == 0:
+		return fmt.Sprintf("-e %s filters out %s", a.f.env, plural(len(cached), "instance"))
+	case !all && len(a.filter(cached, false)) == 0:
+		return fmt.Sprintf("%s not running, see hop ls --all", plural(len(inEnv), "instance"))
+	}
+	return ""
+}
+
+func (a *app) pairs() []inventory.Pair { return a.pairsIn(a.f.regions) }
+
+// pairsIn returns the profile/region pairs in scope, in the given regions rather than
+// those of each profile when there are any.
+func (a *app) pairsIn(regions []string) []inventory.Pair {
 	var out []inventory.Pair
 	for _, p := range a.selectedProfiles() {
-		regions := a.cfg.Regions(p.Name, p.Region, a.files.DefaultRegion)
+		rs := a.cfg.Regions(p.Name, p.Region, a.files.DefaultRegion)
 		// -r queries the requested region even if the configuration does not list it:
 		// `hop ls -p acme-prod -r us-east-1` must work without declaring anything.
-		if len(a.f.regions) > 0 {
-			regions = a.f.regions
+		if len(regions) > 0 {
+			rs = regions
 		}
-		for _, r := range regions {
+		for _, r := range rs {
 			out = append(out, inventory.Pair{Profile: p.Name, Region: r, PreferSSO: p.PreferSSO()})
 		}
 	}
@@ -187,6 +301,16 @@ func (a *app) usesProcess(profile string) bool {
 	return p != nil && p.Kind == awsconf.KindProcess
 }
 
+// mfaError explains why hop cannot load a profile whose role, or a role along its
+// source_profile chain (m), is assumed with an MFA code.
+func mfaError(profile string, m *awsconf.Profile) error {
+	where := "mfa_serial"
+	if m.Name != profile {
+		where += " in " + m.Name
+	}
+	return fmt.Errorf("profile %s needs an MFA code (%s), and hop does not prompt for MFA codes yet: use a profile without MFA, or one whose credentials come from aws-vault or another credential_process", profile, where)
+}
+
 // freshWindow is how old the inventory of a pair may be for hop to act on it as is.
 // Past it, a search that misses queries the pair again (see resolve), and an instance
 // found there is looked up again before hop acts on it (see verify).
@@ -198,7 +322,8 @@ func (a *app) stale(force bool) []inventory.Pair { return a.olderThan(a.cfg.TTL(
 
 // olderThan returns the pairs in scope whose data is older than maxAge, or all of them
 // with force. A pair already queried during this call is never queried again, and a
-// background refresh leaves out credential_process profiles.
+// background refresh leaves out credential_process profiles. A pair recorded as needing
+// an MFA code (see refresh) stays as is until mfa_serial goes from its profile.
 func (a *app) olderThan(maxAge time.Duration, force bool) []inventory.Pair {
 	now := time.Now()
 	var todo []inventory.Pair
@@ -208,7 +333,12 @@ func (a *app) olderThan(maxAge time.Duration, force bool) []inventory.Pair {
 			continue
 		}
 		t, ok := a.inv.Targets[key]
-		if force || !ok || !t.Fresh(maxAge, now) {
+		switch {
+		case ok && t.ErrKind == inventory.ErrMFA:
+			if a.files.MFAProfile(p.Profile) == nil {
+				todo = append(todo, p)
+			}
+		case force || !ok || !t.Fresh(maxAge, now):
 			todo = append(todo, p)
 		}
 	}
@@ -224,18 +354,33 @@ func (a *app) ensure(ctx context.Context, force bool) error {
 // refresh queries the given pairs and saves the cache. When ctx is canceled (Ctrl-C),
 // nothing is recorded: the pairs cut short are not errors, and the caller gets the
 // context error.
+//
+// A profile that needs an MFA code is not queried: the SDK cannot load it without a way
+// to ask for the code. Its pairs are recorded in error, with the reason.
 func (a *app) refresh(ctx context.Context, todo []inventory.Pair) error {
 	if len(todo) == 0 {
 		return nil
 	}
-	progress := func(done, total int) {
-		if stderrTTY {
-			fmt.Fprintf(os.Stderr, "\r\033[Khop: inventory %d/%d", done, total)
+	var query []inventory.Pair
+	var results []*inventory.Target
+	for _, p := range todo {
+		if m := a.files.MFAProfile(p.Profile); m != nil {
+			results = append(results, &inventory.Target{Profile: p.Profile, Region: p.Region,
+				Err: mfaError(p.Profile, m).Error(), ErrKind: inventory.ErrMFA, ErrAt: time.Now()})
+			continue
 		}
+		query = append(query, p)
 	}
-	results := inventory.FetchAll(ctx, todo, 25*time.Second, progress)
-	if stderrTTY {
-		fmt.Fprint(os.Stderr, "\r\033[K")
+	if len(query) > 0 {
+		progress := func(done, total int) {
+			if stderrTTY {
+				fmt.Fprintf(os.Stderr, "\r\033[Khop: inventory %d/%d", done, total)
+			}
+		}
+		results = append(results, inventory.FetchAll(ctx, query, 25*time.Second, progress)...)
+		if stderrTTY {
+			fmt.Fprint(os.Stderr, "\r\033[K")
+		}
 	}
 	if err := ctx.Err(); err != nil {
 		return err
@@ -285,8 +430,14 @@ func (a *app) refreshArgs() []string {
 
 // instances returns the inventory filtered by -e, and by state unless all is set.
 func (a *app) instances(all bool) []inventory.Instance {
+	return a.filter(a.inv.Instances(a.keys()), all)
+}
+
+// filter keeps the instances of the -e environment, and the running ones unless all is
+// set.
+func (a *app) filter(items []inventory.Instance, all bool) []inventory.Instance {
 	var out []inventory.Instance
-	for _, in := range a.inv.Instances(a.keys()) {
+	for _, in := range items {
 		if a.f.env != "" && in.Env != a.f.env {
 			continue
 		}
@@ -347,6 +498,9 @@ func (a *app) reportProblems() {
 		switch k {
 		case inventory.ErrBadKeys:
 			hint("hop doctor for details on static-key profiles")
+			continue
+		case inventory.ErrMFA:
+			hint("use a profile without mfa_serial, or get the credentials from aws-vault or another credential_process")
 			continue
 		case inventory.ErrLoginExpired:
 			hint(`sign in again with "aws login --profile <profile>", then hop ls --refresh`)
@@ -479,6 +633,9 @@ func decide(matches []inventory.Instance, query string, interactive bool) verdic
 // after a question or through the picker otherwise (see decide). asked reports that
 // the user chose the instance, rather than hop on its own.
 func (a *app) resolve(ctx context.Context, args []string, why purpose) (in inventory.Instance, asked bool, err error) {
+	if err := a.checkScope(); err != nil {
+		return inventory.Instance{}, false, err
+	}
 	if err := a.ensure(ctx, a.f.refresh); err != nil {
 		return inventory.Instance{}, false, err
 	}
@@ -487,7 +644,11 @@ func (a *app) resolve(ctx context.Context, args []string, why purpose) (in inven
 		running := a.instances(false)
 		if len(running) == 0 {
 			a.reportProblems()
-			return inventory.Instance{}, false, errors.New("no running instance in scope")
+			msg := "no running instance in scope"
+			if r := a.emptyReason(false); r != "" {
+				msg += ": " + r
+			}
+			return inventory.Instance{}, false, errors.New(msg)
 		}
 		in, err := a.pick(match.Search(running, "", a.recents, a.cfg.Label).Matches, "")
 		return in, true, err
@@ -516,6 +677,10 @@ func (a *app) resolve(ctx context.Context, args []string, why purpose) (in inven
 		if res.Literal != "" {
 			msg = "no instance with " + res.Literal + " " + query
 		}
+		// Nothing to search at all: -e or -r left it out.
+		if r := a.emptyReason(true); r != "" {
+			msg += " (" + r + ")"
+		}
 		if len(suggestions) > 0 {
 			msg += "\n     did you mean: " + strings.Join(suggestions, ", ")
 		}
@@ -533,8 +698,8 @@ func (a *app) resolve(ctx context.Context, args []string, why purpose) (in inven
 			return inventory.Instance{}, false, notFound(names)
 		case verdictConfirm:
 			in := res.Matches[0]
-			if !confirm(fmt.Sprintf("\"%s\" does not exist. Did you mean %s (%s, %s)?", query, in.Name, in.Profile, in.Region), why.confirmDefault()) {
-				return inventory.Instance{}, false, errAborted
+			if err := ask(ctx, fmt.Sprintf("\"%s\" does not exist. Did you mean %s (%s, %s)?", query, in.Name, in.Profile, in.Region), why.confirmDefault()); err != nil {
+				return inventory.Instance{}, false, err
 			}
 			return in, true, nil
 		}
@@ -557,8 +722,8 @@ func (a *app) resolve(ctx context.Context, args []string, why purpose) (in inven
 				return inventory.Instance{}, false, fmt.Errorf("%s is a private IP and %d profiles are in scope: other accounts may use it too. Narrow with -p %s (no terminal to confirm)",
 					query, n, in.Profile)
 			}
-			if !confirm(fmt.Sprintf("%s is %s (%s, %s), but private IPs repeat across accounts. %s", query, in.Name, in.Profile, in.Region, why.question()), false) {
-				return inventory.Instance{}, false, errAborted
+			if err := ask(ctx, fmt.Sprintf("%s is %s (%s, %s), but private IPs repeat across accounts. %s", query, in.Name, in.Profile, in.Region, why.question()), false); err != nil {
+				return inventory.Instance{}, false, err
 			}
 			return in, true, nil
 		}
@@ -581,8 +746,8 @@ func (a *app) resolve(ctx context.Context, args []string, why purpose) (in inven
 		if res.Exact { // a hybrid node, as above
 			question = fmt.Sprintf("%s (%s, %s, %s) is a hybrid node: its name and IP are reported by the node itself. %s", in.Name, in.ID, in.Profile, in.Region, why.question())
 		}
-		if !confirm(question, why.confirmDefault()) {
-			return inventory.Instance{}, false, errAborted
+		if err := ask(ctx, question, why.confirmDefault()); err != nil {
+			return inventory.Instance{}, false, err
 		}
 		return in, true, nil
 	}
@@ -664,8 +829,8 @@ func (a *app) verify(ctx context.Context, cfg aws.Config, in inventory.Instance,
 		if !stdinTTY || !stderrTTY {
 			return in, "", fmt.Errorf("%s: not acting on it without a terminal to confirm", doubt)
 		}
-		if !confirm(doubt+". "+why.question(), false) {
-			return in, "", errAborted
+		if err := ask(ctx, doubt+". "+why.question(), false); err != nil {
+			return in, "", err
 		}
 		return in, "", nil
 	case !found:
@@ -721,22 +886,39 @@ func severalMatch(items []inventory.Instance) error {
 	return fmt.Errorf("several instances match, be more specific: %s", describeAll(items))
 }
 
-// describeAll lists instances on one line, with the state of those not running.
+// describeAll lists instances on one line, with the state of those not running: the
+// first few, then how many more, so that a broad search stays readable.
 func describeAll(items []inventory.Instance) string {
+	const most = 5
 	var out []string
-	for _, in := range items {
+	for _, in := range items[:min(most, len(items))] {
 		s := in.Name + " (" + in.Profile + ", " + in.Region
 		if !in.Running() {
 			s += ", " + in.State
 		}
 		out = append(out, s+")")
 	}
+	if len(items) > most {
+		out = append(out, fmt.Sprintf("and %d more", len(items)-most))
+	}
 	return strings.Join(out, "; ")
+}
+
+// touch records a connection to in among the recent instances.
+func (a *app) touch(in inventory.Instance) {
+	if err := a.recents.Touch(in.Key()); err != nil {
+		warn("recent instances not saved: %v", err)
+	}
 }
 
 // awsConfig loads the instance's profile and checks its credentials before handing over
 // to the plugin. On an expired SSO token, it offers to open the portal right away.
 func (a *app) awsConfig(ctx context.Context, in inventory.Instance) (aws.Config, error) {
+	// The SDK would refuse to load the profile without a way to ask for the code: say
+	// why instead.
+	if m := a.files.MFAProfile(in.Profile); m != nil {
+		return aws.Config{}, mfaError(in.Profile, m)
+	}
 	cfg, err := inventory.AWSConfig(ctx, in.Profile, in.Region, a.preferSSO(in.Profile))
 	if err != nil {
 		return cfg, err
@@ -751,7 +933,11 @@ func (a *app) awsConfig(ctx context.Context, in inventory.Instance) (aws.Config,
 	if !ok || inventory.Classify(err) != inventory.ErrSSOExpired {
 		return cfg, fmt.Errorf("credentials for profile %s: %w", in.Profile, inventory.RedactError(err))
 	}
-	if !confirm(fmt.Sprintf("SSO token expired for %s. Sign in again now?", pt.Label()), true) {
+	yes, err := confirm(ctx, fmt.Sprintf("SSO token expired for %s. Sign in again now?", pt.Label()), true)
+	if err != nil {
+		return cfg, err
+	}
+	if !yes {
 		return cfg, fmt.Errorf("SSO token expired for %s: hop login %s", pt.Label(), pt.Label())
 	}
 	if err := ssoLogin(pt); err != nil {

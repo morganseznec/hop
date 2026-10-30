@@ -333,6 +333,10 @@ func TestRun(t *testing.T) {
 			if sent[0]["TimeoutSeconds"] != float64(300) {
 				t.Errorf("TimeoutSeconds %v, want 300", sent[0]["TimeoutSeconds"])
 			}
+			// Within the document's default hour, its default applies.
+			if params, _ := sent[0]["Parameters"].(map[string]any); params["executionTimeout"] != nil {
+				t.Errorf("executionTimeout %v for a 5-minute wait", params["executionTimeout"])
+			}
 			if ids, _ := sent[0]["InstanceIds"].([]any); len(ids) != 1 || ids[0] != "i-0aaa" {
 				t.Errorf("instance ids %v", sent[0]["InstanceIds"])
 			}
@@ -495,9 +499,14 @@ func TestRunErrors(t *testing.T) {
 		}
 	})
 	t.Run("polling fails", func(t *testing.T) {
-		_, cfg := newFake(t, func(op string, req map[string]any) (int, string) {
-			if op == "SendCommand" {
+		// An error that waiting does not fix: hop stops following the command, cancels
+		// it since it was never seen on the instance, and says which command it was.
+		fake, cfg := newFake(t, func(op string, req map[string]any) (int, string) {
+			switch op {
+			case "SendCommand":
 				return 200, `{"Command":{"CommandId":"c-0abc"}}`
+			case "CancelCommand":
+				return 200, `{}`
 			}
 			return 400, `{"__type":"InvalidCommandId","message":"gone"}`
 		})
@@ -506,7 +515,189 @@ func TestRunErrors(t *testing.T) {
 		if !errors.As(err, &api) || api.ErrorCode() != "InvalidCommandId" {
 			t.Errorf("error %v", err)
 		}
+		var pe *PollError
+		if !errors.As(err, &pe) || !pe.Canceled || !strings.Contains(err.Error(), "c-0abc") || !strings.Contains(err.Error(), "hop canceled it") {
+			t.Errorf("want a PollError naming the command, canceled: %v", err)
+		}
+		if n := len(fake.got("CancelCommand")); n != 1 {
+			t.Errorf("%d CancelCommand calls", n)
+		}
+		if n := len(fake.got("GetCommandInvocation")); n != 1 {
+			t.Errorf("polled %d times after a permanent error", n)
+		}
 	})
+	t.Run("polling fails while the command runs", func(t *testing.T) {
+		polls := 0
+		var mu sync.Mutex
+		fake, cfg := newFake(t, func(op string, req map[string]any) (int, string) {
+			switch op {
+			case "SendCommand":
+				return 200, `{"Command":{"CommandId":"c-0abc"}}`
+			case "GetCommandInvocation":
+				mu.Lock()
+				defer mu.Unlock()
+				if polls++; polls == 1 {
+					return 200, invocation("InProgress", -1, "", "")
+				}
+				return 400, `{"__type":"AccessDeniedException","message":"no ssm:GetCommandInvocation"}`
+			}
+			return 200, `{}`
+		})
+		fastPolls(t)
+		_, err := Run(context.Background(), cfg, "i-0aaa", []string{"sleep 60"}, time.Minute)
+		var pe *PollError
+		if !errors.As(err, &pe) || pe.Canceled || !strings.Contains(err.Error(), "may still run") || !strings.Contains(err.Error(), "c-0abc") {
+			t.Errorf("error %v", err)
+		}
+		if n := len(fake.got("CancelCommand")); n != 0 {
+			t.Errorf("a running command was canceled (%d calls)", n)
+		}
+	})
+}
+
+func TestRunPollsThroughTransientErrors(t *testing.T) {
+	cases := []struct {
+		name   string
+		status int
+		body   string
+	}{
+		{"throttled", 400, `{"__type":"ThrottlingException","message":"Rate exceeded"}`},
+		{"too many requests", 429, `{"__type":"TooManyRequestsException","message":"slow down"}`},
+		{"server error", 500, `{"__type":"InternalServerError","message":"try again"}`},
+		{"unavailable", 503, `{"message":"unavailable"}`},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			fastPolls(t)
+			polls := 0
+			var mu sync.Mutex
+			fake, cfg := newFake(t, func(op string, req map[string]any) (int, string) {
+				if op == "SendCommand" {
+					return 200, `{"Command":{"CommandId":"c-0abc"}}`
+				}
+				mu.Lock()
+				defer mu.Unlock()
+				switch polls++; polls {
+				case 1:
+					return 200, invocation("InProgress", -1, "", "")
+				case 2, 3:
+					return c.status, c.body
+				}
+				return 200, invocation("Success", 0, "done\n", "")
+			})
+			out, err := Run(context.Background(), cfg, "i-0aaa", []string{"true"}, time.Minute)
+			if err != nil || out.Stdout != "done\n" {
+				t.Fatalf("output %+v, error %v", out, err)
+			}
+			if n := len(fake.got("CancelCommand")); n != 0 {
+				t.Errorf("%d CancelCommand calls", n)
+			}
+		})
+	}
+	t.Run("network down until the wait is over", func(t *testing.T) {
+		fastPolls(t)
+		fake, cfg := newFake(t, func(op string, req map[string]any) (int, string) {
+			if op == "SendCommand" {
+				return 200, `{"Command":{"CommandId":"c-0abc"}}`
+			}
+			return 200, `{}`
+		})
+		// The commands go through, the status checks do not: a server that is gone.
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if strings.HasSuffix(r.Header.Get("X-Amz-Target"), "GetCommandInvocation") {
+				hj, ok := w.(http.Hijacker)
+				if !ok {
+					t.Error("no hijacker")
+					return
+				}
+				conn, _, _ := hj.Hijack()
+				conn.Close()
+				return
+			}
+			fake.ServeHTTP(w, r)
+		}))
+		defer srv.Close()
+		cfg.BaseEndpoint = aws.String(srv.URL)
+		_, err := Run(context.Background(), cfg, "i-0aaa", []string{"true"}, 100*time.Millisecond)
+		var te *TimeoutError
+		if !errors.As(err, &te) || !te.Canceled || !strings.Contains(err.Error(), "the last status check failed") || !strings.Contains(err.Error(), "c-0abc") {
+			t.Errorf("error %v", err)
+		}
+		if n := len(fake.got("CancelCommand")); n != 1 {
+			t.Errorf("%d CancelCommand calls", n)
+		}
+	})
+}
+
+func TestExecutionTimeout(t *testing.T) {
+	cases := []struct {
+		wait time.Duration
+		want string // empty: the document's default
+	}{
+		{0, ""},
+		{2 * time.Minute, ""},
+		{time.Hour, ""},
+		{time.Hour + time.Second, "3601"},
+		{90*time.Minute + 500*time.Millisecond, "5401"},
+		{3 * time.Hour, "10800"},
+		{48 * time.Hour, "172800"},
+		{100 * time.Hour, "172800"},
+	}
+	for _, c := range cases {
+		got, ok := executionTimeout(c.wait)
+		if got != c.want || ok != (c.want != "") {
+			t.Errorf("executionTimeout(%s) = %q, %v; want %q", c.wait, got, ok, c.want)
+		}
+	}
+}
+
+func TestRunLongerThanAnHour(t *testing.T) {
+	fake, cfg := newFake(t, func(op string, req map[string]any) (int, string) {
+		if op == "SendCommand" {
+			return 200, `{"Command":{"CommandId":"c-0abc"}}`
+		}
+		return 200, invocation("Success", 0, "", "")
+	})
+	if _, err := Run(context.Background(), cfg, "i-0aaa", []string{"make all"}, 3*time.Hour); err != nil {
+		t.Fatal(err)
+	}
+	sent := fake.got("SendCommand")
+	params, _ := sent[0]["Parameters"].(map[string]any)
+	// A string, as every parameter of an SSM document.
+	if got, _ := params["executionTimeout"].([]any); len(got) != 1 || got[0] != "10800" {
+		t.Errorf("executionTimeout %#v, want [\"10800\"]", params["executionTimeout"])
+	}
+	if sent[0]["TimeoutSeconds"] != float64(10800) {
+		t.Errorf("TimeoutSeconds %v", sent[0]["TimeoutSeconds"])
+	}
+}
+
+func TestCheckPush(t *testing.T) {
+	dir := t.TempDir()
+	small := filepath.Join(dir, "app.conf")
+	os.WriteFile(small, []byte("listen 8080\n"), 0o600)
+	limit := filepath.Join(dir, "limit.bin")
+	os.WriteFile(limit, make([]byte, PushLimit), 0o600)
+	big := filepath.Join(dir, "big.bin")
+	os.WriteFile(big, make([]byte, PushLimit+1), 0o600)
+	cases := []struct {
+		local, remote string
+		want          string // empty: accepted
+	}{
+		{small, "/opt/acme/app.conf", ""},
+		{limit, "/opt/acme/limit.bin", ""},
+		{big, "/opt/acme/big.bin", "too large"},
+		{small, "app.conf", "absolute"},
+		// The remote path is checked first: it needs no file system access.
+		{filepath.Join(dir, "missing"), "relative", "absolute"},
+		{filepath.Join(dir, "missing"), "/opt/acme/x", "missing"},
+	}
+	for _, c := range cases {
+		err := CheckPush(c.local, c.remote)
+		if (c.want == "") != (err == nil) || (err != nil && !strings.Contains(err.Error(), c.want)) {
+			t.Errorf("CheckPush(%s, %s) = %v, want %q", filepath.Base(c.local), c.remote, err, c.want)
+		}
+	}
 }
 
 func TestPushRejectsBeforeAnyCall(t *testing.T) {

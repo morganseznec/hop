@@ -19,20 +19,30 @@ func tempConfigDir(t *testing.T) string {
 	return filepath.Join(base, "hop")
 }
 
-func writeConfig(t *testing.T, content string) {
+// configFile returns the configuration file, failing the test without one.
+func configFile(t *testing.T) string {
 	t.Helper()
-	if err := os.MkdirAll(Dir(), 0o755); err != nil {
+	p, err := Path()
+	if err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(Path(), []byte(content), 0o644); err != nil {
+	return p
+}
+
+func writeConfig(t *testing.T, content string) {
+	t.Helper()
+	if err := os.MkdirAll(filepath.Dir(configFile(t)), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(configFile(t), []byte(content), 0o644); err != nil {
 		t.Fatal(err)
 	}
 }
 
 func TestDir(t *testing.T) {
 	dir := tempConfigDir(t)
-	if Dir() != dir || Path() != filepath.Join(dir, "config.yaml") {
-		t.Errorf("with XDG_CONFIG_HOME: %s, %s", Dir(), Path())
+	if d, err := Dir(); err != nil || d != dir || configFile(t) != filepath.Join(dir, "config.yaml") {
+		t.Errorf("with XDG_CONFIG_HOME: %s, %v, %s", d, err, configFile(t))
 	}
 
 	home := t.TempDir()
@@ -44,8 +54,28 @@ func TestDir(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		want = filepath.Join(home, "AppData", "Roaming", "hop")
 	}
-	if got := Dir(); got != want {
-		t.Errorf("without XDG_CONFIG_HOME: %s, want %s", got, want)
+	if got, err := Dir(); err != nil || got != want {
+		t.Errorf("without XDG_CONFIG_HOME: %s, %v, want %s", got, err, want)
+	}
+}
+
+func TestWithoutHome(t *testing.T) {
+	for _, k := range []string{"HOME", "USERPROFILE", "home", "XDG_CONFIG_HOME", "APPDATA"} {
+		t.Setenv(k, "")
+	}
+	wd := t.TempDir()
+	t.Chdir(wd)
+	if d, err := Dir(); err == nil || !strings.Contains(err.Error(), "home directory is not set") {
+		t.Errorf("Dir() = %q, %v: want an error", d, err)
+	}
+	if _, err := Load(); err == nil || !strings.Contains(err.Error(), "XDG_CONFIG_HOME") {
+		t.Errorf("Load: %v", err)
+	}
+	if err := (&Config{Include: []string{"acme-*"}}).Save(); err == nil {
+		t.Error("Save: want an error")
+	}
+	if left, _ := os.ReadDir(wd); len(left) != 0 {
+		t.Errorf("written relative to the working directory: %v", left)
 	}
 }
 
@@ -120,7 +150,7 @@ func TestLoadErrors(t *testing.T) {
 			if err == nil || !strings.Contains(err.Error(), c.want) {
 				t.Errorf("error %v, want it to mention %q", err, c.want)
 			}
-			if err != nil && !strings.Contains(err.Error(), Path()) {
+			if err != nil && !strings.Contains(err.Error(), configFile(t)) {
 				t.Errorf("the error must name the file: %v", err)
 			}
 		})
@@ -158,7 +188,7 @@ func TestLoadAcceptsEveryPolicy(t *testing.T) {
 func TestLoadUnreadable(t *testing.T) {
 	// A directory in place of the file is an error, not an empty configuration.
 	tempConfigDir(t)
-	if err := os.MkdirAll(Path(), 0o755); err != nil {
+	if err := os.MkdirAll(configFile(t), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := Load(); err == nil {
@@ -192,7 +222,7 @@ func TestSave(t *testing.T) {
 	if err := c.Save(); err != nil {
 		t.Fatal(err)
 	}
-	bak, err := os.ReadFile(Path() + ".bak")
+	bak, err := os.ReadFile(configFile(t) + ".bak")
 	if err != nil || string(bak) != handWritten {
 		t.Errorf("backup %q (%v), want the previous file", bak, err)
 	}
@@ -204,7 +234,7 @@ func TestSave(t *testing.T) {
 		t.Errorf("saved regions: %v", got.ExtraRegions)
 	}
 	// Empty fields are omitted from the file.
-	b, _ := os.ReadFile(Path())
+	b, _ := os.ReadFile(configFile(t))
 	if strings.Contains(string(b), "labels") || strings.Contains(string(b), "transcript") {
 		t.Errorf("empty fields written:\n%s", b)
 	}
@@ -222,7 +252,7 @@ func TestSavePermissions(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	for _, p := range []string{dir, Path(), Path() + ".bak"} {
+	for _, p := range []string{dir, configFile(t), configFile(t) + ".bak"} {
 		st, err := os.Stat(p)
 		if err != nil {
 			t.Fatal(err)

@@ -28,10 +28,14 @@ func newLs(f *filters) *cobra.Command {
 			if err != nil {
 				return err
 			}
+			if err := a.checkScope(); err != nil {
+				return err
+			}
 			if err := a.ensure(cmd.Context(), f.refresh); err != nil {
 				return err
 			}
 			items := a.instances(all)
+			words := len(items) > 0 && len(args) > 0
 			if len(args) > 0 {
 				// Search ranks by relevance; ls keeps the per-account order.
 				keep := map[string]bool{}
@@ -46,14 +50,27 @@ func newLs(f *filters) *cobra.Command {
 				}
 				items = filtered
 			}
+			// The problems go to stderr with --json too: a script must not take the last
+			// known instances of an unreachable account for the current ones.
 			if asJSON {
-				return a.printJSON(items)
+				if err := a.printJSON(items); err != nil {
+					return err
+				}
+				a.reportProblems()
+				return nil
 			}
-			if len(items) == 0 {
-				info("no instances")
-			} else {
+			switch {
+			case len(items) > 0:
 				a.printTable(items)
 				a.printFooter(items)
+			case words:
+				info("no instances match %q", strings.Join(args, " "))
+			default:
+				msg := "no instances"
+				if r := a.emptyReason(all); r != "" {
+					msg += ": " + r
+				}
+				info("%s", msg)
 			}
 			a.reportProblems()
 			return nil
@@ -64,17 +81,33 @@ func newLs(f *filters) *cobra.Command {
 	return cmd
 }
 
+// printJSON writes the instances as a JSON list. Each row says how old its data is:
+// fetched_at is the last successful query of its profile/region pair, stale reports a
+// pair whose last query failed (error) or whose data is older than the TTL.
 func (a *app) printJSON(items []inventory.Instance) error {
 	type row struct {
 		inventory.Instance
 		Transcript inventory.Transcript `json:"transcript"`
 		Label      string               `json:"label,omitempty"`
+		FetchedAt  time.Time            `json:"fetched_at,omitzero"`
+		Stale      bool                 `json:"stale"`
+		Error      string               `json:"error,omitempty"`
 	}
+	now := time.Now()
 	out := []row{}
 	for _, in := range items {
-		r := row{Instance: in, Label: a.cfg.Label(in.Profile)}
+		r := row{Instance: in, Label: a.cfg.Label(in.Profile), Stale: true}
 		if t := a.target(in); t != nil {
 			r.Transcript = t.Transcript
+			// Whole seconds in UTC: 2026-10-30T09:15:00Z.
+			r.FetchedAt = t.FetchedAt.UTC().Truncate(time.Second)
+			r.Stale = t.Err != "" || t.FetchedAt.IsZero() || now.Sub(t.FetchedAt) >= a.cfg.TTL()
+			if t.Err != "" {
+				r.Error = shortError(t.Err)
+				if k := t.ErrKind; k != "" && k != inventory.ErrOther && k != inventory.ErrMFA {
+					r.Error = k.Explain() + ": " + r.Error
+				}
+			}
 		}
 		out = append(out, r)
 	}

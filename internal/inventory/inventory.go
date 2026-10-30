@@ -124,25 +124,51 @@ func (t *Target) updated() time.Time {
 type Inventory struct {
 	Version int                `json:"version"`
 	Targets map[string]*Target `json:"targets"`
+	// profiles, when set by Retain, are the only profiles whose pairs Save keeps.
+	profiles map[string]bool
+}
+
+// Retain makes Save drop the pairs of every other profile: those of a profile removed
+// from the AWS files, which nothing would ever refresh or show again.
+func (inv *Inventory) Retain(profiles []string) {
+	inv.profiles = map[string]bool{}
+	for _, p := range profiles {
+		inv.profiles[p] = true
+	}
 }
 
 const version = 1
 
-func CacheDir() string {
+// CacheDir returns the folder of the cache. Without a home directory (HOME unset) and
+// without XDG_CACHE_HOME, it fails rather than use a folder relative to the working
+// directory.
+func CacheDir() (string, error) {
 	if d := os.Getenv("XDG_CACHE_HOME"); d != "" {
-		return filepath.Join(d, "hop")
+		return filepath.Join(d, "hop"), nil
 	}
 	if runtime.GOOS == "windows" {
 		if d, err := os.UserCacheDir(); err == nil {
-			return filepath.Join(d, "hop")
+			return filepath.Join(d, "hop"), nil
 		}
 	}
-	home, _ := os.UserHomeDir()
-	return filepath.Join(home, ".cache", "hop")
+	home, err := os.UserHomeDir()
+	if err != nil || home == "" {
+		return "", errors.New("no folder for the inventory cache: the home directory is not set (set HOME, or XDG_CACHE_HOME)")
+	}
+	return filepath.Join(home, ".cache", "hop"), nil
 }
 
-func Path() string { return filepath.Join(CacheDir(), "inventory.json") }
+// Path returns the cache file, or the CacheDir error.
+func Path() (string, error) {
+	dir, err := CacheDir()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(dir, "inventory.json"), nil
+}
 
+// Load reads the cache. Without one (or without a folder for it), the inventory is
+// empty: Save reports the folder error.
 func Load() *Inventory {
 	if disk, ok := readCache(); ok {
 		return disk
@@ -153,7 +179,11 @@ func Load() *Inventory {
 // readCache reads the cache file. An unreadable cache, or one from another version,
 // counts as no cache: it is only a cache, rebuilt by the next refresh.
 func readCache() (*Inventory, bool) {
-	b, err := os.ReadFile(Path())
+	p, err := Path()
+	if err != nil {
+		return nil, false
+	}
+	b, err := os.ReadFile(p)
 	if err != nil {
 		return nil, false
 	}
@@ -172,10 +202,14 @@ func readCache() (*Inventory, bool) {
 // lock, and the file is written to a temporary file then renamed, so two concurrent
 // calls never leave a truncated file behind.
 func (inv *Inventory) Save() error {
-	if err := os.MkdirAll(CacheDir(), 0o700); err != nil {
+	dir, err := CacheDir()
+	if err != nil {
 		return err
 	}
-	release := saveLock()
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return err
+	}
+	release := saveLock(dir)
 	defer release()
 	if disk, ok := readCache(); ok {
 		if inv.Targets == nil {
@@ -187,11 +221,20 @@ func (inv *Inventory) Save() error {
 			}
 		}
 	}
+	// After the merge, which would otherwise bring back from disk the pairs of a
+	// profile removed since.
+	if inv.profiles != nil {
+		for k, t := range inv.Targets {
+			if t == nil || !inv.profiles[t.Profile] {
+				delete(inv.Targets, k)
+			}
+		}
+	}
 	b, err := json.Marshal(inv)
 	if err != nil {
 		return err
 	}
-	tmp, err := os.CreateTemp(CacheDir(), "inventory-*.json")
+	tmp, err := os.CreateTemp(dir, "inventory-*.json")
 	if err != nil {
 		return err
 	}
@@ -200,7 +243,7 @@ func (inv *Inventory) Save() error {
 		err = cerr
 	}
 	if err == nil {
-		err = os.Rename(tmp.Name(), Path())
+		err = os.Rename(tmp.Name(), filepath.Join(dir, "inventory.json"))
 	}
 	if err != nil {
 		os.Remove(tmp.Name())
@@ -346,10 +389,11 @@ const lockStale = 10 * time.Minute
 
 // Lock keeps two background refreshes from running at the same time.
 func Lock() (release func(), ok bool) {
-	if err := os.MkdirAll(CacheDir(), 0o700); err != nil {
+	dir, err := CacheDir()
+	if err != nil || os.MkdirAll(dir, 0o700) != nil {
 		return func() {}, true
 	}
-	return tryLock(filepath.Join(CacheDir(), "refresh.lock"), lockStale)
+	return tryLock(filepath.Join(dir, "refresh.lock"), lockStale)
 }
 
 // Save waits up to saveLockWait for another Save to finish, and takes over a save lock
@@ -359,11 +403,11 @@ const (
 	saveLockStale = 10 * time.Second
 )
 
-// saveLock serializes the read-merge-write of Save across processes. It never fails:
-// past saveLockWait, or when no lock can be created, Save goes ahead without it rather
-// than not saving at all.
-func saveLock() (release func()) {
-	p := filepath.Join(CacheDir(), "save.lock")
+// saveLock serializes the read-merge-write of Save across processes, with a lock file
+// in dir. It never fails: past saveLockWait, or when no lock can be created, Save goes
+// ahead without it rather than not saving at all.
+func saveLock(dir string) (release func()) {
+	p := filepath.Join(dir, "save.lock")
 	deadline := time.Now().Add(saveLockWait)
 	for {
 		release, ok := tryLock(p, saveLockStale)

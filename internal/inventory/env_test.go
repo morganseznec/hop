@@ -1,6 +1,10 @@
 package inventory
 
-import "testing"
+import (
+	"slices"
+	"strings"
+	"testing"
+)
 
 func TestDeriveEnvCases(t *testing.T) {
 	cases := []struct {
@@ -66,5 +70,38 @@ func TestDeriveEnvTagPrecedence(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestNormalizeEnv(t *testing.T) {
+	cases := map[string]string{
+		"prod": "prod", "PROD": "prod", "production": "prod", "prd": "prod", " p ": "prod",
+		"test": "test", "staging": "test", "dev": "test", "qa": "test", "uat": "test",
+		"preprod": "test", "Recette": "test", "stg": "test",
+		"": "", "sandbox": "", "prod-eu": "", "testing": "",
+	}
+	for in, want := range cases {
+		got, ok := NormalizeEnv(in)
+		if got != want || ok != (want != "") {
+			t.Errorf("NormalizeEnv(%q) = %q, %v; want %q", in, got, ok, want)
+		}
+	}
+}
+
+func TestEnvWords(t *testing.T) {
+	if got := strings.Join(EnvWords("prod"), ","); got != "p,prd,production" {
+		t.Errorf("prod: %s", got)
+	}
+	got := EnvWords("test")
+	if !slices.IsSorted(got) || slices.Contains(got, "test") || !slices.Contains(got, "staging") || !slices.Contains(got, "dev") {
+		t.Errorf("test: %v", got)
+	}
+	// Every word listed is accepted, and means its environment.
+	for _, env := range []string{"prod", "test"} {
+		for _, w := range EnvWords(env) {
+			if got, _ := NormalizeEnv(w); got != env {
+				t.Errorf("%s listed for %s, normalized to %q", w, env, got)
+			}
+		}
 	}
 }

@@ -8,12 +8,16 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/ssm"
 	"github.com/aws/smithy-go"
+	smithyhttp "github.com/aws/smithy-go/transport/http"
+
+	"github.com/morganseznec/hop/internal/inventory"
 )
 
 // SSM truncates the output returned by GetCommandInvocation to 24,000 characters.
@@ -31,6 +35,13 @@ const (
 // cancelTimeout bounds the CancelCommand call made once hop stops waiting, with a
 // context of its own since the caller's may already be canceled.
 const cancelTimeout = 10 * time.Second
+
+// AWS-RunShellScript stops a command after its executionTimeout parameter: an hour by
+// default, 48 hours at most.
+const (
+	defaultExecutionTimeout = time.Hour
+	maxExecutionTimeout     = 48 * time.Hour
+)
 
 type Output struct {
 	CommandID string
@@ -52,18 +63,50 @@ type TimeoutError struct {
 	Status     string
 	Canceled   bool
 	cancelErr  error
+	// pollErr is the transient error of the last status check, when it failed: the
+	// status may then be out of date.
+	pollErr error
 }
 
 func (e *TimeoutError) Error() string {
+	unsure := ""
+	if e.pollErr != nil {
+		unsure = fmt.Sprintf(" (as far as hop knows: the last status check failed, %v)", e.pollErr)
+	}
 	if e.Status != "TimedOut" && !undelivered(e.Status) {
-		return fmt.Sprintf("still running after %s: the command keeps running on %s (id %s)", e.Waited, e.InstanceID, e.CommandID)
+		return fmt.Sprintf("still running after %s%s: the command keeps running on %s (id %s)", e.Waited, unsure, e.InstanceID, e.CommandID)
 	}
 	what := "the command expired"
 	if e.Status != "TimedOut" {
 		what = dropped(e.Canceled, e.cancelErr)
 	}
-	return fmt.Sprintf("%s did not pick up the command within %s (instance stopped or SSM agent offline): %s (id %s)", e.InstanceID, e.Waited, what, e.CommandID)
+	if unsure == "" {
+		unsure = " (instance stopped or SSM agent offline)"
+	}
+	return fmt.Sprintf("%s did not pick up the command within %s%s: %s (id %s)", e.InstanceID, e.Waited, unsure, what, e.CommandID)
 }
+
+// PollError reports that hop could not follow a command it sent: GetCommandInvocation
+// failed with an error that waiting does not fix (see transient). The fields read as
+// in TimeoutError; Err is the GetCommandInvocation error.
+type PollError struct {
+	CommandID  string
+	InstanceID string
+	Status     string
+	Canceled   bool
+	Err        error
+	cancelErr  error
+}
+
+func (e *PollError) Error() string {
+	what := "it may still run there"
+	if undelivered(e.Status) {
+		what = dropped(e.Canceled, e.cancelErr)
+	}
+	return fmt.Sprintf("cannot follow the command sent to %s (%v): %s (id %s)", e.InstanceID, e.Err, what, e.CommandID)
+}
+
+func (e *PollError) Unwrap() error { return e.Err }
 
 // InterruptedError reports that the context ended (Ctrl-C) while hop waited for a
 // command. The fields read as in TimeoutError; Err is the context error.
@@ -111,19 +154,49 @@ func deliveryTimeout(wait time.Duration) int32 {
 	return int32((d + time.Second - 1) / time.Second)
 }
 
+// executionTimeout is the executionTimeout parameter of AWS-RunShellScript, in seconds,
+// for a wait longer than the document's default: as long as hop waits, within the 48
+// hours the document accepts, so that the agent does not stop the command after an
+// hour while hop still waits for it. ok is false when the default is long enough.
+func executionTimeout(wait time.Duration) (seconds string, ok bool) {
+	if wait <= defaultExecutionTimeout {
+		return "", false
+	}
+	d := min(wait, maxExecutionTimeout)
+	return strconv.FormatInt(int64((d+time.Second-1)/time.Second), 10), true
+}
+
+// transient reports whether a GetCommandInvocation error may go away by itself:
+// throttling, the network, or an error on the AWS side (5xx). Polling goes on through
+// them until the wait is over.
+func transient(err error) bool {
+	switch inventory.Classify(err) {
+	case inventory.ErrThrottled, inventory.ErrNetwork:
+		return true
+	}
+	var re *smithyhttp.ResponseError
+	return errors.As(err, &re) && re.HTTPStatusCode() >= 500
+}
+
 // Run sends shell commands through SendCommand and waits for them to finish. The SDK
 // serializes the parameters as JSON, so quotes and slashes need no manual escaping.
 //
-// The delivery timeout of the command is the wait (30 seconds at least), and a command
-// that has not reached the instance when hop stops waiting (wait over or ctx canceled)
-// is canceled: it never runs hours later, when a stopped instance comes back. A command
-// already running keeps running. The TimeoutError or InterruptedError says which.
+// The delivery timeout of the command is the wait (30 seconds at least), and so is its
+// execution timeout past the default hour. A command that has not reached the instance
+// when hop stops waiting (wait over, ctx canceled, or its status can no longer be read)
+// is canceled: it never runs hours later, when a stopped instance comes back. A
+// command already running keeps running. The TimeoutError, InterruptedError or
+// PollError says which.
 func Run(ctx context.Context, cfg aws.Config, instanceID string, commands []string, wait time.Duration) (*Output, error) {
 	c := ssm.NewFromConfig(cfg)
+	params := map[string][]string{"commands": commands}
+	if t, ok := executionTimeout(wait); ok {
+		params["executionTimeout"] = []string{t}
+	}
 	sent, err := c.SendCommand(ctx, &ssm.SendCommandInput{
 		InstanceIds:    []string{instanceID},
 		DocumentName:   aws.String("AWS-RunShellScript"),
-		Parameters:     map[string][]string{"commands": commands},
+		Parameters:     params,
 		Comment:        aws.String("hop"),
 		TimeoutSeconds: aws.Int32(deliveryTimeout(wait)),
 	})
@@ -132,16 +205,25 @@ func Run(ctx context.Context, cfg aws.Config, instanceID string, commands []stri
 	}
 	id := aws.ToString(sent.Command.CommandId)
 	status := ""
-	stop := func(cause error) error {
+	// lastErr is the transient error of the last poll, nil once a poll succeeds.
+	var lastErr error
+	// stop cancels the command if it has not reached the instance, and says why hop
+	// stopped following it: the context ended (interrupted), polling failed for good
+	// (pollErr), or the wait is over.
+	stop := func(interrupted, pollErr error) error {
 		canceled, cancelErr := cancelUndelivered(ctx, c, id, instanceID, status)
-		if cause != nil {
-			return &InterruptedError{CommandID: id, InstanceID: instanceID, Status: status, Canceled: canceled, Err: cause, cancelErr: cancelErr}
+		switch {
+		case interrupted != nil:
+			return &InterruptedError{CommandID: id, InstanceID: instanceID, Status: status, Canceled: canceled, Err: interrupted, cancelErr: cancelErr}
+		case pollErr != nil:
+			return &PollError{CommandID: id, InstanceID: instanceID, Status: status, Canceled: canceled, Err: pollErr, cancelErr: cancelErr}
 		}
-		return &TimeoutError{CommandID: id, InstanceID: instanceID, Waited: wait, Status: status, Canceled: canceled, cancelErr: cancelErr}
+		return &TimeoutError{CommandID: id, InstanceID: instanceID, Waited: wait, Status: status, Canceled: canceled, cancelErr: cancelErr, pollErr: lastErr}
 	}
 	deadline := time.Now().Add(wait)
 	for {
 		inv, err := c.GetCommandInvocation(ctx, &ssm.GetCommandInvocationInput{CommandId: aws.String(id), InstanceId: aws.String(instanceID)})
+		lastErr = nil
 		if err == nil {
 			status = string(inv.Status)
 			switch status {
@@ -158,21 +240,25 @@ func Run(ctx context.Context, cfg aws.Config, instanceID string, commands []stri
 				return out, nil
 			}
 		} else if ctx.Err() == nil {
-			// Right after SendCommand, the invocation does not exist yet.
 			var api smithy.APIError
-			if !errors.As(err, &api) || api.ErrorCode() != "InvocationDoesNotExist" {
-				return nil, err
+			switch {
+			case errors.As(err, &api) && api.ErrorCode() == "InvocationDoesNotExist":
+				// Right after SendCommand, the invocation does not exist yet.
+			case transient(err):
+				lastErr = err
+			default:
+				return nil, stop(nil, err)
 			}
 		}
 		if err := ctx.Err(); err != nil {
-			return nil, stop(err)
+			return nil, stop(err, nil)
 		}
 		if time.Now().After(deadline) {
-			return nil, stop(nil)
+			return nil, stop(nil, nil)
 		}
 		select {
 		case <-ctx.Done():
-			return nil, stop(ctx.Err())
+			return nil, stop(ctx.Err(), nil)
 		case <-time.After(pollInterval):
 		}
 	}
@@ -209,9 +295,31 @@ func explainSend(err error, id string) error {
 	return err
 }
 
-// PushLimit is the largest file Push accepts: beyond it, the SendCommand parameters
-// get too large.
+// PushLimit is the largest file Push accepts, in bytes: beyond it, the SendCommand
+// parameters get too large.
 const PushLimit = 400_000
+
+// CheckPush refuses what Push would refuse, without reading the file or calling AWS:
+// a remote path that is not absolute, or a local file larger than PushLimit.
+func CheckPush(local, remote string) error {
+	if !strings.HasPrefix(remote, "/") {
+		// A relative path would land in the working directory the SSM agent creates for
+		// each command.
+		return fmt.Errorf("remote path must be absolute (start with /): %s", remote)
+	}
+	st, err := os.Stat(local)
+	if err != nil {
+		return err
+	}
+	return checkSize(local, st.Size())
+}
+
+func checkSize(local string, n int64) error {
+	if n > PushLimit {
+		return fmt.Errorf("%s: %d bytes, too large for this method (limit %d): go through S3 instead", local, n, PushLimit)
+	}
+	return nil
+}
 
 // pushChunk is the number of base64 characters written by one command of the push
 // script, to keep each command short.
@@ -222,17 +330,16 @@ const pushChunk = 2800
 // When the copy fails on the instance, Push returns the Output (and its Stderr) along
 // with the error.
 func Push(ctx context.Context, cfg aws.Config, instanceID, local, remote string) (*Output, error) {
-	if !strings.HasPrefix(remote, "/") {
-		// A relative path would land in the working directory the SSM agent creates for
-		// each command.
-		return nil, fmt.Errorf("remote path must be absolute (start with /): %s", remote)
+	if err := CheckPush(local, remote); err != nil {
+		return nil, err
 	}
 	b, err := os.ReadFile(local)
 	if err != nil {
 		return nil, err
 	}
-	if len(b) > PushLimit {
-		return nil, fmt.Errorf("%d bytes, too large for this method (limit %d): go through S3 instead", len(b), PushLimit)
+	// The file may have grown since CheckPush.
+	if err := checkSize(local, int64(len(b))); err != nil {
+		return nil, err
 	}
 	sum := sha256.Sum256(b)
 	want := hex.EncodeToString(sum[:])

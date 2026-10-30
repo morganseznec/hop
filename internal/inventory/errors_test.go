@@ -10,6 +10,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -361,6 +362,37 @@ source_profile = acme-prod
 	}
 }
 
+func TestClassifyMFA(t *testing.T) {
+	// The SDK refuses to load a role assumed with mfa_serial when nobody can type the
+	// code, before any network call.
+	fakeEnv(t, "http://127.0.0.1:1")
+	cfgPath := filepath.Join(t.TempDir(), "config")
+	if err := os.WriteFile(cfgPath, []byte(`[profile acme-prod]
+region = eu-west-1
+
+[profile acme-mfa]
+role_arn = arn:aws:iam::111111111111:role/Admin
+source_profile = acme-prod
+mfa_serial = arn:aws:iam::111111111111:mfa/alice
+`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("AWS_CONFIG_FILE", cfgPath)
+	_, err := AWSConfig(context.Background(), "acme-mfa", "eu-west-1", false)
+	if err == nil {
+		t.Fatal("want an error")
+	}
+	if got := Classify(err); got != ErrMFA {
+		t.Errorf("got %q, want %q (%v)", got, ErrMFA, err)
+	}
+	if got := Classify(fmt.Errorf("profile acme-mfa: %w", awsconfig.AssumeRoleTokenProviderNotSetError{})); got != ErrMFA {
+		t.Errorf("wrapped: %q", got)
+	}
+	if e := ErrMFA.Explain(); !strings.Contains(e, "MFA") || !strings.Contains(e, "does not prompt") {
+		t.Errorf("explanation %q", e)
+	}
+}
+
 func TestClassifyMessages(t *testing.T) {
 	cases := []struct {
 		msg  string
@@ -392,7 +424,7 @@ func TestClassifyMessages(t *testing.T) {
 }
 
 func TestExplain(t *testing.T) {
-	kinds := []ErrKind{ErrSSOExpired, ErrLoginExpired, ErrBadKeys, ErrDenied, ErrRegion, ErrThrottled, ErrNetwork}
+	kinds := []ErrKind{ErrSSOExpired, ErrLoginExpired, ErrBadKeys, ErrDenied, ErrRegion, ErrThrottled, ErrNetwork, ErrMFA}
 	seen := map[string]ErrKind{}
 	for _, k := range kinds {
 		e := k.Explain()

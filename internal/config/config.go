@@ -43,23 +43,40 @@ type Config struct {
 	Labels map[string]string `yaml:"labels,omitempty"`
 }
 
-func Dir() string {
+// Dir returns the folder of the configuration. Without a home directory (HOME unset)
+// and without XDG_CONFIG_HOME, it fails rather than use a folder relative to the
+// working directory.
+func Dir() (string, error) {
 	if d := os.Getenv("XDG_CONFIG_HOME"); d != "" {
-		return filepath.Join(d, "hop")
+		return filepath.Join(d, "hop"), nil
 	}
 	if runtime.GOOS == "windows" {
 		if d, err := os.UserConfigDir(); err == nil {
-			return filepath.Join(d, "hop")
+			return filepath.Join(d, "hop"), nil
 		}
 	}
-	home, _ := os.UserHomeDir()
-	return filepath.Join(home, ".config", "hop")
+	home, err := os.UserHomeDir()
+	if err != nil || home == "" {
+		return "", errors.New("no folder for hop's configuration: the home directory is not set (set HOME, or XDG_CONFIG_HOME)")
+	}
+	return filepath.Join(home, ".config", "hop"), nil
 }
 
-func Path() string { return filepath.Join(Dir(), "config.yaml") }
+// Path returns the configuration file, or the Dir error.
+func Path() (string, error) {
+	dir, err := Dir()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(dir, "config.yaml"), nil
+}
 
 func Load() (*Config, error) {
-	b, err := os.ReadFile(Path())
+	p, err := Path()
+	if err != nil {
+		return nil, err
+	}
+	b, err := os.ReadFile(p)
 	if errors.Is(err, fs.ErrNotExist) {
 		return &Config{}, nil
 	}
@@ -72,27 +89,27 @@ func Load() (*Config, error) {
 	dec.KnownFields(true)
 	// io.EOF: an empty file, or one with only comments.
 	if err := dec.Decode(&c); err != nil && !errors.Is(err, io.EOF) {
-		return nil, errors.New(Path() + ": " + err.Error())
+		return nil, errors.New(p + ": " + err.Error())
 	}
 	// An invalid pattern matches nothing: in include, it would hide every profile.
 	for _, list := range []struct {
 		key      string
 		patterns []string
 	}{{"include", c.Include}, {"exclude", c.Exclude}} {
-		for _, p := range list.patterns {
-			if _, err := path.Match(p, ""); err != nil {
-				return nil, fmt.Errorf("%s: invalid pattern in %s: %q", Path(), list.key, p)
+		for _, pat := range list.patterns {
+			if _, err := path.Match(pat, ""); err != nil {
+				return nil, fmt.Errorf("%s: invalid pattern in %s: %q", p, list.key, pat)
 			}
 		}
 	}
 	switch c.Transcript {
 	case "", TranscriptWarn, TranscriptRequire, TranscriptOff:
 	default:
-		return nil, errors.New(Path() + ": transcript must be warn, require or off")
+		return nil, errors.New(p + ": transcript must be warn, require or off")
 	}
 	if c.CacheTTL != "" {
 		if _, err := time.ParseDuration(c.CacheTTL); err != nil {
-			return nil, errors.New(Path() + ": invalid cache_ttl: " + c.CacheTTL)
+			return nil, errors.New(p + ": invalid cache_ttl: " + c.CacheTTL)
 		}
 	}
 	return &c, nil
@@ -102,11 +119,15 @@ func Load() (*Config, error) {
 // to it as .bak. The file lists profile names: it is created readable by its owner
 // only, like the cache.
 func (c *Config) Save() error {
-	if err := os.MkdirAll(Dir(), 0o700); err != nil {
+	p, err := Path()
+	if err != nil {
 		return err
 	}
-	if old, err := os.ReadFile(Path()); err == nil {
-		if err := os.WriteFile(Path()+".bak", old, 0o600); err != nil {
+	if err := os.MkdirAll(filepath.Dir(p), 0o700); err != nil {
+		return err
+	}
+	if old, err := os.ReadFile(p); err == nil {
+		if err := os.WriteFile(p+".bak", old, 0o600); err != nil {
 			return err
 		}
 	}
@@ -114,7 +135,7 @@ func (c *Config) Save() error {
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(Path(), b, 0o600)
+	return os.WriteFile(p, b, 0o600)
 }
 
 func (c *Config) TranscriptPolicy() string {
