@@ -51,7 +51,9 @@ homebrew_casks:
     repository:
       owner: morganseznec
       name: homebrew-tap
-      token: '{{ index .Env "HOMEBREW_TAP_GITHUB_TOKEN" }}'
+      # GoReleaser accepts nothing but a bare env reference here. The release workflow
+      # always sets the variable, empty when the secret is missing.
+      token: "{{ .Env.HOMEBREW_TAP_GITHUB_TOKEN }}"
     # Without the tap token (forks, first releases), build everything but the cask.
     skip_upload: '{{ if index .Env "HOMEBREW_TAP_GITHUB_TOKEN" }}false{{ else }}true{{ end }}'
     homepage: https://github.com/morganseznec/hop
