@@ -1,0 +1,286 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>hop: reach any EC2 instance with one command</title>
+<meta name="description" content="hop finds EC2 instances across every AWS profile on your machine and opens a Session Manager shell by name, ID or IP. No SSH keys, no bastion.">
+<meta property="og:title" content="hop">
+<meta property="og:description" content="Reach any EC2 instance in any of your AWS accounts with one command, through Session Manager.">
+<meta property="og:url" content="https://morganseznec.github.io/hop/">
+<link rel="icon" href="logo-mark.svg" type="image/svg+xml">
+<style>
+  :root {
+    --bg: #ffffff;
+    --bg-soft: #f4f7f8;
+    --text: #0c1220;
+    --muted: #4b5563;
+    --line: #e2e8ec;
+    --accent: #1f8f78;
+    --accent-soft: #e6f8f2;
+    --on-accent: #ffffff;
+    --term-bg: #0c1220;
+    --term-text: #d7e3ea;
+    --term-dim: #8a9bab;
+    --term-ok: #5ae6be;
+    --term-warn: #f2c66d;
+    --radius: 10px;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #0c1220;
+      --bg-soft: #121a2b;
+      --text: #e8eef3;
+      --muted: #9aa8b6;
+      --line: #22304a;
+      --accent: #5ae6be;
+      --accent-soft: #10302b;
+      --on-accent: #0c1220;
+      --term-bg: #070b14;
+    }
+  }
+  * { box-sizing: border-box; }
+  html { -webkit-text-size-adjust: 100%; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--text);
+    font: 16px/1.6 -apple-system, BlinkMacSystemFont, "Segoe UI", Inter, Roboto, sans-serif;
+  }
+  a { color: var(--accent); text-decoration: none; }
+  a:hover { text-decoration: underline; }
+  code, pre { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+  .wrap { max-width: 1040px; margin: 0 auto; padding: 0 16px; }
+
+  header { border-bottom: 1px solid var(--line); }
+  header .wrap { display: flex; align-items: center; justify-content: space-between; height: 64px; }
+  header img { height: 30px; display: block; }
+  nav a { color: var(--muted); margin-left: 20px; font-size: 15px; }
+  nav a:hover { color: var(--text); text-decoration: none; }
+
+  .hero { padding: 72px 0 40px; text-align: center; }
+  .hero picture img { width: min(340px, 70vw); height: auto; }
+  .hero h1 { font-size: clamp(28px, 4.4vw, 44px); line-height: 1.15; margin: 28px auto 14px; max-width: 780px; letter-spacing: -0.02em; }
+  .hero p.lead { color: var(--muted); font-size: 18px; max-width: 640px; margin: 0 auto 28px; }
+  .cta { display: inline-flex; gap: 12px; flex-wrap: wrap; justify-content: center; }
+  .btn { display: inline-block; padding: 10px 18px; border-radius: 8px; font-weight: 600; font-size: 15px; border: 1px solid var(--line); color: var(--text); }
+  .btn.primary { background: var(--accent); border-color: var(--accent); color: var(--on-accent); }
+  .btn:hover { text-decoration: none; filter: brightness(1.05); }
+
+  .install { max-width: 720px; margin: 40px auto 0; text-align: left; }
+  .tabs { display: flex; flex-wrap: wrap; gap: 4px; border-bottom: 1px solid var(--line); }
+  .tabs input { position: absolute; opacity: 0; pointer-events: none; }
+  .tabs label { padding: 8px 14px; cursor: pointer; color: var(--muted); font-size: 14px; border-bottom: 2px solid transparent; margin-bottom: -1px; }
+  .tabs input:checked + label { color: var(--text); border-color: var(--accent); font-weight: 600; }
+  .tabs input:focus-visible + label { outline: 2px solid var(--accent); outline-offset: 2px; }
+  .panel { display: none; width: 100%; order: 99; padding-top: 12px; }
+  #t-brew:checked ~ #p-brew, #t-linux:checked ~ #p-linux, #t-win:checked ~ #p-win,
+  #t-docker:checked ~ #p-docker, #t-go:checked ~ #p-go { display: block; }
+  .panel p { color: var(--muted); font-size: 14px; margin: 10px 2px 0; }
+
+  pre.code {
+    margin: 0; background: var(--bg-soft); border: 1px solid var(--line); border-radius: var(--radius);
+    padding: 14px 16px; overflow-x: auto; font-size: 14px; line-height: 1.55;
+  }
+
+  .term { background: var(--term-bg); border-radius: 12px; overflow: hidden; border: 1px solid #1d2a40; box-shadow: 0 12px 40px rgba(12, 18, 32, 0.18); }
+  .term .bar { display: flex; gap: 7px; padding: 12px 14px; background: #111a2c; }
+  .term .bar span { width: 11px; height: 11px; border-radius: 50%; background: #2a3a55; }
+  .term pre { margin: 0; padding: 16px 18px 20px; color: var(--term-text); font-size: 13px; line-height: 1.6; overflow-x: auto; }
+  .term .p { color: var(--term-ok); }
+  .term .d { color: var(--term-dim); }
+  .term .w { color: var(--term-warn); }
+
+  section { padding: 56px 0; }
+  section.soft { background: var(--bg-soft); border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); }
+  h2 { font-size: 28px; letter-spacing: -0.01em; margin: 0 0 8px; }
+  .sub { color: var(--muted); margin: 0 0 32px; max-width: 680px; }
+  .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 16px; }
+  .card { background: var(--bg); border: 1px solid var(--line); border-radius: var(--radius); padding: 20px; }
+  section.soft .card { background: var(--bg); }
+  .card h3 { margin: 0 0 6px; font-size: 17px; }
+  .card p { margin: 0; color: var(--muted); font-size: 15px; }
+  .card code { font-size: 13px; background: var(--accent-soft); padding: 1px 5px; border-radius: 4px; color: var(--text); }
+
+  .demo { display: grid; grid-template-columns: 1fr; gap: 20px; }
+
+  table.usage { width: 100%; border-collapse: collapse; font-size: 15px; }
+  table.usage td { padding: 10px 8px; border-bottom: 1px solid var(--line); vertical-align: top; }
+  table.usage td:first-child { color: var(--muted); width: 38%; }
+  table.usage code { font-size: 13.5px; }
+
+  footer { padding: 36px 0 48px; color: var(--muted); font-size: 14px; }
+  footer .wrap { display: flex; flex-wrap: wrap; gap: 16px; justify-content: space-between; align-items: center; }
+
+  @media (max-width: 640px) {
+    nav a { margin-left: 14px; }
+    nav a.hide-sm { display: none; }
+    .hero { padding-top: 48px; }
+    table.usage td:first-child { width: 42%; }
+  }
+</style>
+</head>
+<body>
+
+<header>
+  <div class="wrap">
+    <a href="./" aria-label="hop home">
+      <picture>
+        <source media="(prefers-color-scheme: dark)" srcset="logo-dark.svg">
+        <img src="logo-light.svg" alt="hop">
+      </picture>
+    </a>
+    <nav>
+      <a href="https://github.com/morganseznec/hop/blob/main/docs/reference.md" class="hide-sm">Reference</a>
+      <a href="https://github.com/morganseznec/hop/blob/main/CHANGELOG.md" class="hide-sm">Changelog</a>
+      <a href="https://github.com/morganseznec/hop/releases">Releases</a>
+      <a href="https://github.com/morganseznec/hop">GitHub</a>
+    </nav>
+  </div>
+</header>
+
+<main>
+  <div class="hero">
+    <div class="wrap">
+      <h1>Reach any EC2 instance in any of your AWS accounts with one command.</h1>
+      <p class="lead">hop finds your instances across every AWS profile on your machine, lets you pick one by name, and opens an AWS Systems Manager Session Manager shell. No SSH keys, no bastion, no instance IDs to copy.</p>
+      <div class="cta">
+        <a class="btn primary" href="#install">Install</a>
+        <a class="btn" href="https://github.com/morganseznec/hop">View on GitHub</a>
+      </div>
+
+      <div class="install" id="install">
+        <div class="tabs" role="tablist" aria-label="Install hop">
+          <input type="radio" name="t" id="t-brew" checked><label for="t-brew">macOS</label>
+          <input type="radio" name="t" id="t-linux"><label for="t-linux">Linux</label>
+          <input type="radio" name="t" id="t-win"><label for="t-win">Windows</label>
+          <input type="radio" name="t" id="t-docker"><label for="t-docker">Docker</label>
+          <input type="radio" name="t" id="t-go"><label for="t-go">Go</label>
+
+          <div class="panel" id="p-brew">
+<pre class="code">brew install --cask morganseznec/tap/hop-cli</pre>
+            <p>Installs the <code>hop</code> command and <code>session-manager-plugin</code>. Always use the full name the first time: Homebrew's main repository has an unrelated <code>hop</code> cask.</p>
+          </div>
+          <div class="panel" id="p-linux">
+<pre class="code"># Debian, Ubuntu
+sudo dpkg -i hop_&lt;version&gt;_amd64.deb
+# Fedora, RHEL, Amazon Linux
+sudo rpm -i hop-&lt;version&gt;-1.x86_64.rpm
+# Arch Linux
+sudo pacman -U hop-&lt;version&gt;-1-x86_64.pkg.tar.zst</pre>
+            <p>Packages for amd64 and arm64 (and Alpine <code>.apk</code>) are on every <a href="https://github.com/morganseznec/hop/releases/latest">release</a>. hop also needs the AWS <a href="https://docs.aws.amazon.com/systems-manager/latest/userguide/session-manager-working-with-install-plugin.html">Session Manager plugin</a>.</p>
+          </div>
+          <div class="panel" id="p-win">
+<pre class="code">Download hop_&lt;version&gt;_windows_amd64.zip (or arm64)
+from the latest release and put hop.exe on your PATH.</pre>
+            <p>Get it from the <a href="https://github.com/morganseznec/hop/releases/latest">latest release</a>, and install the AWS <a href="https://docs.aws.amazon.com/systems-manager/latest/userguide/session-manager-working-with-install-plugin.html">Session Manager plugin</a>.</p>
+          </div>
+          <div class="panel" id="p-docker">
+<pre class="code">docker run --rm -it --user "$(id -u):$(id -g)" \
+  -v ~/.aws:/home/hop/.aws:ro -v hop-cache:/tmp/hop \
+  ghcr.io/morganseznec/hop ls</pre>
+            <p>Alpine, non-root, no package manager, signed, with the plugin built from source. Sign in to SSO on the host.</p>
+          </div>
+          <div class="panel" id="p-go">
+<pre class="code">go install github.com/morganseznec/hop/cmd/hop@latest</pre>
+            <p>Needs Go 1.27 or later, and the AWS <a href="https://docs.aws.amazon.com/systems-manager/latest/userguide/session-manager-working-with-install-plugin.html">Session Manager plugin</a>.</p>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <section>
+    <div class="wrap demo">
+      <div>
+        <h2>Type what you remember</h2>
+        <p class="sub">A name, a few words, an instance ID or a private IP. hop searched every profile, each in its own region, checked your SSO token and whether the account logs sessions, then connected.</p>
+      </div>
+      <div class="term" aria-label="Example: connecting with hop">
+        <div class="bar"><span></span><span></span><span></span></div>
+<pre><span class="p">$</span> hop shop app
+<span class="d">hop: session LOGGED on acme-p-shop-app (i-0abc1234def567890, acme-prod, eu-west-1) to /acme/ssm/sessions. Everything that follows is recorded.</span>
+
+Starting session with SessionId: alice-0a1b2c3d4e5f67890
+sh-5.2$</pre>
+      </div>
+      <div class="term" aria-label="Example: the inventory">
+        <div class="bar"><span></span><span></span><span></span></div>
+<pre><span class="p">$</span> hop ls
+  NAME             PROFILE    REGION     ENV   IP          AGENT        LOGGING
+  acme-p-shop-app  acme-prod  eu-west-1  prod  10.0.1.21   online       yes
+  acme-p-tools     acme-prod  eu-west-1  prod  10.0.1.40   online       yes
+  acme-p-batch     acme-prod  us-east-1  prod  10.8.2.15   <span class="w">lost 3h ago</span>  yes
+  acme-t-api       acme-test  eu-west-1  test  10.20.1.30  online       <span class="w">NO</span>
+<span class="d">4 instances, 2 profiles, regions eu-west-1, us-east-1 (cached 4m ago, --refresh to query again)</span></pre>
+      </div>
+    </div>
+  </section>
+
+  <section class="soft">
+    <div class="wrap">
+      <h2>Everything Session Manager, without the ceremony</h2>
+      <p class="sub">One tool for the whole fleet, from your laptop or a container.</p>
+      <div class="grid">
+        <div class="card"><h3>Every account, one command</h3><p>Each profile is queried in its own region, in parallel, and cached. <code>hop scan</code> finds instances in regions you forgot.</p></div>
+        <div class="card"><h3>SSO that just works</h3><p>Profiles are grouped by SSO portal: one <code>hop login</code> covers every account behind it. An expired token is caught before connecting.</p></div>
+        <div class="card"><h3>More than shells</h3><p><code>hop run</code> keeps the remote exit code, <code>hop tunnel</code> forwards ports (also to hosts behind the instance), <code>hop push</code> copies small files with a SHA-256 check.</p></div>
+        <div class="card"><h3>Knows if you are recorded</h3><p>Before a shell, hop reads the account's Session Manager preferences and shows where the session is logged, or warns you. <code>transcript: require</code> refuses unlogged sessions.</p></div>
+        <div class="card"><h3>A health check for your AWS setup</h3><p><code>hop doctor</code> spots expired tokens, revoked or long-lived keys, profiles defined twice and unlogged accounts, each with the command that fixes it.</p></div>
+        <div class="card"><h3>Everywhere you work</h3><p>macOS, Linux and Windows, on amd64 and arm64, with zsh, bash, fish and PowerShell completion.</p></div>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <div class="wrap">
+      <h2>Safe by default</h2>
+      <p class="sub">hop opens shells on real servers, so it never guesses.</p>
+      <div class="grid">
+        <div class="card"><h3>Exact or it asks</h3><p>It acts on its own only on an unambiguous match. An IP or instance ID must match exactly: <code>10.0.1.2</code> never picks <code>10.0.1.21</code>.</p></div>
+        <div class="card"><h3>Fresh before acting</h3><p>When its data is more than a minute old, hop looks the chosen instance up again. A stopped, renamed or replaced instance is never acted on.</p></div>
+        <div class="card"><h3>No terminal, no guess</h3><p>In scripts, hop lists the candidates and stops. <code>run</code> and <code>push</code> default to no when they ask.</p></div>
+      </div>
+    </div>
+  </section>
+
+  <section class="soft">
+    <div class="wrap">
+      <h2>Releases you can verify</h2>
+      <p class="sub">Built by GitHub Actions from tagged commits on main, with signatures and provenance anyone can check.</p>
+      <div class="grid">
+        <div class="card"><h3>Signed</h3><p>Checksums and container images are signed keylessly with Sigstore <code>cosign</code>.</p></div>
+        <div class="card"><h3>SLSA level 3 provenance</h3><p>Every release carries <code>hop.intoto.jsonl</code>, checkable with <code>slsa-verifier</code> and <code>gh attestation verify</code>.</p></div>
+        <div class="card"><h3>Scanned and pinned</h3><p>CodeQL, govulncheck, fuzzing, Trivy, actions pinned by commit, an <a href="https://scorecard.dev/viewer/?uri=github.com/morganseznec/hop">OpenSSF Scorecard</a>.</p></div>
+      </div>
+      <p style="margin-top:24px"><a href="https://github.com/morganseznec/hop#verify-what-you-downloaded">How to verify a download</a></p>
+    </div>
+  </section>
+
+  <section>
+    <div class="wrap">
+      <h2>Commands</h2>
+      <p class="sub">The full list is in <code>hop --help</code> and the <a href="https://github.com/morganseznec/hop/blob/main/docs/reference.md">reference</a>.</p>
+      <table class="usage">
+        <tr><td>Pick an instance from the whole fleet</td><td><code>hop</code></td></tr>
+        <tr><td>Connect by name, words, ID or IP</td><td><code>hop shop app</code>, <code>hop i-0abc12...</code>, <code>hop 10.0.1.21</code></td></tr>
+        <tr><td>Narrow down</td><td><code>hop -p 'acme-*' -e prod</code>, <code>hop -r us-east-1 tools</code></td></tr>
+        <tr><td>Inventory</td><td><code>hop ls</code>, <code>hop ls --all</code>, <code>hop ls --json</code></td></tr>
+        <tr><td>One-off command</td><td><code>hop run tools uptime</code></td></tr>
+        <tr><td>Port forwarding</td><td><code>hop tunnel tools 5432 15432 --host db.internal</code></td></tr>
+        <tr><td>Copy a small file</td><td><code>hop push ./app.conf tools /etc/app.conf</code></td></tr>
+        <tr><td>SSO login, health check, forgotten regions</td><td><code>hop login</code>, <code>hop doctor</code>, <code>hop scan</code></td></tr>
+      </table>
+    </div>
+  </section>
+</main>
+
+<footer>
+  <div class="wrap">
+    <span>hop is free and open source, under the <a href="https://github.com/morganseznec/hop/blob/main/LICENSE">MIT license</a>. Examples use fictional accounts.</span>
+    <span><a href="https://github.com/morganseznec/hop">GitHub</a> · <a href="https://github.com/morganseznec/hop/discussions">Discussions</a> · <a href="https://ko-fi.com/B0F429R66U">Support on Ko-fi</a></span>
+  </div>
+</footer>
+
+</body>
+</html>
