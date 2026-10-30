@@ -53,11 +53,11 @@ $ hop ls
 ## Quick start
 
 ```bash
-brew install --cask morganseznec/tap/hop   # macOS; see Install for Linux, Windows and Docker
-aws configure sso                          # only if you have no AWS profile yet
-hop doctor                                 # plugin, SSO tokens, keys, profiles
-hop ls                                     # every instance hop can see
-hop shop                                   # connect by a word of its name
+brew install --cask morganseznec/tap/hop-cli   # macOS; see Install for Linux, Windows and Docker
+aws configure sso                              # only if you have no AWS profile yet
+hop doctor                                     # plugin, SSO tokens, keys, profiles
+hop ls                                         # every instance hop can see
+hop shop                                       # connect by a word of its name
 ```
 
 A partial or fuzzy match asks before connecting. The instances must meet the
@@ -112,12 +112,15 @@ again during a command.
 ### Homebrew (macOS)
 
 ```bash
-brew install --cask morganseznec/tap/hop
+brew install --cask morganseznec/tap/hop-cli
 ```
 
-The cask also installs `session-manager-plugin`. Always use the full name:
-`brew install hop`, without the tap, installs an unrelated cask from Homebrew's main
-repository.
+The cask is called `hop-cli` and installs the `hop` command, plus
+`session-manager-plugin`. Homebrew's main repository has an unrelated `hop` cask, so
+never use `brew install hop` or `brew upgrade --cask hop`. Once installed with the
+full name, the short name works: `brew upgrade --cask hop-cli` (or a plain
+`brew upgrade`). Earlier installs of `morganseznec/tap/hop` move to `hop-cli` on the
+next `brew upgrade`.
 
 ### Linux packages
 

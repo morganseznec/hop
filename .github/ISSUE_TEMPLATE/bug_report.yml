@@ -27,7 +27,7 @@ body:
     attributes:
       label: Installed with
       options:
-        - Homebrew (morganseznec/tap/hop)
+        - Homebrew (morganseznec/tap/hop-cli)
         - Linux package (deb, rpm, apk, Arch)
         - Release archive
         - go install
