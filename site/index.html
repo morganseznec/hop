@@ -389,8 +389,8 @@ sh-5.2$ <span class="caret"></span></pre>
         <article class="card c-4 reveal">
           <div class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="4 17 10 11 4 5"/><line x1="12" y1="19" x2="20" y2="19"/></svg></div>
           <h3>More than shells</h3>
-          <p>Run a command and keep its exit code, forward a port (also to a database behind the instance), copy a small file with a SHA-256 check.</p>
-          <div class="chips"><span class="chip">hop run tools uptime</span><span class="chip">hop tunnel db 5432 --host db.internal</span><span class="chip">hop push ./app.conf tools /etc/app.conf</span></div>
+          <p>ssh, scp and rsync by instance name, a command with its exit code, port forwarding (also to a database behind the instance), a small file copied with a SHA-256 check.</p>
+          <div class="chips"><span class="chip">ssh ec2-user@tools.hop</span><span class="chip">hop run tools uptime</span><span class="chip">hop tunnel db 5432 --host db.internal</span><span class="chip">hop push ./app.conf tools /etc/app.conf</span></div>
         </article>
         <article class="card c-3 reveal">
           <div class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></svg></div>
@@ -400,7 +400,7 @@ sh-5.2$ <span class="caret"></span></pre>
         <article class="card c-3 reveal">
           <div class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="2" y="4" width="20" height="14" rx="2"/><path d="M8 22h8M12 18v4"/></svg></div>
           <h3>Everywhere you work</h3>
-          <p>macOS, Linux and Windows on amd64 and arm64, a hardened Docker image, and completion for zsh, bash, fish and PowerShell.</p>
+          <p>macOS, Linux and Windows on amd64 and arm64, a hardened Docker image, shell integration for zsh, bash and fish, and completion for PowerShell.</p>
         </article>
       </div>
     </div>
@@ -499,10 +499,11 @@ sudo pacman -U hop-&lt;version&gt;-1-x86_64.pkg.tar.zst</pre><button class="copy
         <p class="eyebrow">Questions</p>
         <h2>Good to know.</h2>
       </div>
-      <details><summary>Do my instances need SSH or a public IP?</summary><p>No. hop uses AWS Systems Manager Session Manager: the instance needs the SSM agent online, an instance role such as <code>AmazonSSMManagedInstanceCore</code>, and outbound HTTPS to the SSM endpoints (or VPC endpoints). No inbound port, no key.</p></details>
+      <details><summary>Do my instances need SSH or a public IP?</summary><p>No. hop uses AWS Systems Manager Session Manager: the instance needs the SSM agent online, an instance role such as <code>AmazonSSMManagedInstanceCore</code>, and outbound HTTPS to the SSM endpoints (or VPC endpoints). No inbound port, no key. Need ssh, scp or rsync anyway? <code>hop init ssh</code> sends them through Session Manager too: <code>ssh ec2-user@tools.hop</code>.</p></details>
       <details><summary>Does hop store my AWS credentials?</summary><p>No. It reads profile names from <code>~/.aws</code> and lets the AWS SDK and the Session Manager plugin resolve credentials, like the AWS CLI. Error messages are scrubbed of keys and tokens before they are printed or cached.</p></details>
-      <details><summary>Which IAM permissions does it need?</summary><p>Read access to the EC2 and SSM inventory, <code>ssm:StartSession</code> for shells and tunnels, and <code>ssm:SendCommand</code> for run and push. The <a href="https://github.com/morganseznec/hop#iam-permissions">README</a> has a ready-to-paste policy.</p></details>
+      <details><summary>Which IAM permissions does it need?</summary><p>Read access to the EC2 and SSM inventory, <code>ssm:StartSession</code> for shells, tunnels and ssh, and <code>ssm:SendCommand</code> for run and push. The <a href="https://github.com/morganseznec/hop#iam-permissions">README</a> has a ready-to-paste policy.</p></details>
       <details><summary>How is it different from <code>aws ssm start-session</code>?</summary><p>That command needs the instance ID, the profile and the region. hop finds the instance across every profile and region for you, signs in once per SSO portal, checks session logging and never acts on a fuzzy match.</p></details>
+      <details><summary>What about aws-gate, aws-ssm-tools or taws?</summary><p>Good tools, which work one profile and region at a time; hop searches every profile at once, even across separate AWS Organizations. Some do things hop does not, such as ECS sessions or ephemeral SSH keys: the <a href="https://github.com/morganseznec/hop#how-it-compares">README compares them</a>, strengths included.</p></details>
       <details><summary>Is it free?</summary><p>Yes, MIT licensed and open source. If it saves you time, you can <a href="https://ko-fi.com/B0F429R66U">buy me a coffee</a>.</p></details>
     </div>
   </section>

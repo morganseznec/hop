@@ -94,6 +94,7 @@ words of its name, connects directly; a looser match asks first.`,
   hop ls                      list the instances of every account
   hop run tools uptime        one-off command with its output
   hop tunnel tools 3000       port forwarding
+  ssh ec2-user@tools.hop      ssh, scp, rsync (set up with hop init ssh)
   hop login                   sign in again to expired SSO portals
   hop doctor                  check this machine's AWS setup`,
 		Version:           buildVersion(),
@@ -114,7 +115,7 @@ words of its name, connects directly; a looser match asks first.`,
 	_ = root.RegisterFlagCompletionFunc("env", cobra.FixedCompletions([]string{"prod", "test"}, cobra.ShellCompDirectiveNoFileComp))
 	_ = root.RegisterFlagCompletionFunc("region", completeRegions)
 
-	root.AddCommand(newLs(f), newRun(f), newTunnel(f), newPush(f), newLogin(f), newDoctor(f), newScan(f), newInit(), newRefresh(f))
+	root.AddCommand(newLs(f), newRun(f), newTunnel(f), newPush(f), newLogin(f), newDoctor(f), newScan(f), newSSHProxy(f), newInit(), newRefresh(f))
 	return root
 }
 

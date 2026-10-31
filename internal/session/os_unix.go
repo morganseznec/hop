@@ -26,3 +26,12 @@ var pluginInstallHint = func() string {
 	}
 	return "see https://docs.aws.amazon.com/systems-manager/latest/userguide/session-manager-working-with-install-plugin.html"
 }()
+
+func pluginLocations() []string {
+	return []string{
+		"/opt/homebrew/bin/session-manager-plugin",
+		"/usr/local/bin/session-manager-plugin",
+		"/usr/local/sessionmanagerplugin/bin/session-manager-plugin",
+		"/usr/bin/session-manager-plugin",
+	}
+}

@@ -11,6 +11,7 @@ import (
 	"github.com/morganseznec/hop/internal/awsconf"
 	"github.com/morganseznec/hop/internal/config"
 	"github.com/morganseznec/hop/internal/inventory"
+	"github.com/morganseznec/hop/internal/session"
 	"github.com/morganseznec/hop/internal/state"
 )
 
@@ -60,6 +61,10 @@ func isolate(t *testing.T) string {
 		t.Setenv(k, v)
 	}
 	os.MkdirAll(filepath.Join(home, "aws"), 0o700)
+	// Nor the session-manager-plugin installed on the machine.
+	saved := session.PluginLocations
+	session.PluginLocations = nil
+	t.Cleanup(func() { session.PluginLocations = saved })
 	return home
 }
 
