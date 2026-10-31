@@ -80,9 +80,10 @@ A partial or fuzzy match asks before connecting. The instances must meet the
 - **SSO that just works.** Profiles are grouped by SSO portal, so one `hop login`
   covers every account behind it. An expired token is detected before connecting and
   hop offers to log in again.
-- **More than shells.** `hop run` for one-off commands (exit code preserved),
-  `hop tunnel` for port forwarding (also to hosts behind the instance), `hop push` for
-  small files with a SHA-256 check.
+- **More than shells.** `ssh`, `scp`, `rsync`, `git` and editors' remote mode reach
+  any instance as `tools.hop` after `hop init ssh`. `hop run` for one-off commands
+  (exit code preserved), `hop tunnel` for port forwarding (also to hosts behind the
+  instance), `hop push` for small files with a SHA-256 check.
 - **A health check for your AWS setup.** `hop doctor` spots expired tokens, revoked or
   long-lived keys, profiles defined twice, unlogged accounts and more, each with the
   command that fixes it.
@@ -221,8 +222,22 @@ zsh, in `~/.zshrc` after `compinit`:
 eval "$(hop init zsh)"
 ```
 
-Used to typing another name? `hop init zsh --alias ssm` also defines `ssm` as an
-alias. For bash, fish and PowerShell, see `hop completion --help`.
+bash, in `~/.bashrc` (with the `bash-completion` package when it is installed, without
+it otherwise):
+
+```bash
+eval "$(hop init bash)"
+```
+
+fish, in `~/.config/fish/config.fish`:
+
+```fish
+hop init fish | source
+```
+
+Used to typing another name? `--alias ssm` also defines `ssm` as an alias, with the
+same completion (`hop init zsh --alias ssm`). For PowerShell, see
+`hop completion powershell --help`.
 
 Completion suggests instance names from the cache and respects the flags already
 typed (`hop -p acme-prod <Tab>`).
@@ -237,6 +252,7 @@ typed (`hop -p acme-prod <Tab>`).
 | Inventory | `hop ls`, `hop ls shop`, `hop ls --all`, `hop ls --json` |
 | One-off command | `hop run tools uptime` |
 | Port forwarding | `hop tunnel tools 3000`, `hop tunnel tools 5432 15432 --host db.internal` |
+| ssh, scp, rsync | `hop init ssh >> ~/.ssh/config` once, then `ssh ec2-user@tools.hop` |
 | Copy a small file | `hop push ./app.conf tools /etc/app.conf` |
 | SSO login | `hop login`, `hop login --status`, `hop login acme` |
 | Check your setup | `hop doctor` |
@@ -313,25 +329,43 @@ through a session:
 most, where SSM cuts it) and waits 2 minutes by default (`--timeout`). A command the instance has
 not picked up when hop stops waiting is canceled.
 
-### SSH-style workflows
+### SSH, scp and rsync
 
-hop has no `ssh` or `scp` of its own, but a tunnel to port 22 carries both. The
-instance needs `sshd` running and your public key in the target user's
-`~/.ssh/authorized_keys`:
+`hop init ssh` prints a block for `~/.ssh/config` that sends every host ending in
+`.hop` through Session Manager, with `hop ssh-proxy` as its `ProxyCommand`:
+
+```bash
+hop init ssh >> ~/.ssh/config
+
+ssh ec2-user@tools.hop
+scp ./dump.sql ec2-user@tools.hop:/tmp/
+rsync -a ./site/ ec2-user@acme-p-web.hop:/srv/site/
+ssh -L 5432:db.internal:5432 ec2-user@tools.hop
+```
+
+Anything that speaks SSH works the same way: `git`, `sftp`, Ansible, or the remote
+mode of VS Code and JetBrains editors. Before `.hop` goes what hop searches for: a
+name, an instance ID or a private IP (`ec2-user@10.0.1.40.hop`). ssh gives hop no
+terminal to ask from, so only an unambiguous match connects. To narrow the search for
+every host, add `-p`, `-r` or `-e` to the `ProxyCommand` line
+(`hop ssh-proxy -p 'acme-*' -- %h %p`).
+
+The block runs hop by its full path, since editors start ssh with a short `PATH`, and
+hop also looks for `session-manager-plugin` where its installers put it. The instance
+needs `sshd` running and your public key in the target user's
+`~/.ssh/authorized_keys`, and your role needs `ssm:StartSession` on the
+`AWS-StartSSHSession` document (see [IAM permissions](#iam-permissions)).
+
+Session Manager does not log what goes through SSH, nor through a tunnel: with
+`transcript: require`, `hop ssh-proxy` refuses. Without the ssh setup, a tunnel to
+port 22 does the same job by hand:
 
 ```bash
 hop tunnel tools 22    # hop: localhost:8022 -> acme-p-tools:22 (Ctrl-C to close)
 
 # in another terminal
-scp -P 8022 ./dump.sql ec2-user@localhost:/tmp/
-ssh -p 8022 ec2-user@localhost
+ssh -p 8022 -o HostKeyAlias=acme-p-tools ec2-user@localhost
 ```
-
-Port 22 is below 1024, so hop listens on 8022, or on the next free port (it prints
-which). Every instance shows up as `localhost`: `-o HostKeyAlias=acme-p-tools` keeps
-their host keys apart in `known_hosts`. Session Manager does not log what goes
-through a tunnel. A `ProxyCommand` mode, to run `ssh tools` directly, is not
-available yet.
 
 ## Profiles, regions and SSO
 
@@ -404,8 +438,8 @@ hop also writes `~/.cache/hop/inventory.json` (instances, no credentials) and
 | `ec2:DescribeInstances` | inventory |
 | `ssm:DescribeInstanceInformation` | agent status, hybrid nodes |
 | `ssm:GetDocument` | session logging check |
-| `ssm:StartSession` | shell, tunnel |
-| `ssm:TerminateSession`, `ssm:ResumeSession`, `ssmmessages:OpenDataChannel` | shell, tunnel (your own sessions, also used by `session-manager-plugin`) |
+| `ssm:StartSession` | shell, tunnel, ssh |
+| `ssm:TerminateSession`, `ssm:ResumeSession`, `ssmmessages:OpenDataChannel` | shell, tunnel, ssh (your own sessions, also used by `session-manager-plugin`) |
 | `kms:GenerateDataKey` | shell, when the account encrypts sessions with KMS |
 | `ssm:SendCommand`, `ssm:GetCommandInvocation` | `hop run`, `hop push` |
 | `ssm:CancelCommand` | `hop run`, `hop push` (cancels a command the instance never picked up) |
@@ -442,7 +476,8 @@ As a policy for your role (or permission set):
         "arn:aws:ssm:*:*:managed-instance/*",
         "arn:aws:ssm:*:*:document/SSM-SessionManagerRunShell",
         "arn:aws:ssm:*:*:document/AWS-StartPortForwardingSession",
-        "arn:aws:ssm:*:*:document/AWS-StartPortForwardingSessionToRemoteHost"
+        "arn:aws:ssm:*:*:document/AWS-StartPortForwardingSessionToRemoteHost",
+        "arn:aws:ssm:*:*:document/AWS-StartSSHSession"
       ]
     },
     {
@@ -500,23 +535,34 @@ for S3, plus `kms:Decrypt` on the session key when sessions are KMS-encrypted.
 
 ## How it compares
 
-- **`aws ssm start-session`** opens one session at a time: you give it the instance ID,
-  and the profile and region it lives in. Port forwarding takes a document name and
-  its parameters in JSON.
-- **SSH-oriented tools** such as [aws-gate](https://github.com/xen0l/aws-gate) offer an
-  SSH `ProxyCommand` integration, set up per host in `~/.ssh/config`. hop has no
-  `ProxyCommand` mode yet (see [SSH-style workflows](#ssh-style-workflows)).
-- **hop** is built around the whole fleet:
-  - one inventory of every profile, queried in parallel and cached, searchable by
-    name, words, ID or IP;
-  - one login per SSO portal, with expired tokens caught before connecting;
-  - a session logging check before each shell, and `transcript: require` to refuse
-    unlogged sessions;
-  - never acting on a fuzzy match without a question, nor on any loose match without
-    a terminal;
-  - `run` keeps the remote exit code and cancels commands the instance never picked
-    up; `push` compares the SHA-256 on both sides;
-  - `hop doctor` for the local AWS setup.
+hop is not the only Session Manager client. What the others do well, as of October
+2026:
+
+| Tool | Good at | Next to hop |
+|---|---|---|
+| `aws ssm start-session` | The reference: every document and parameter. | One instance ID, profile and region at a time; port forwarding takes JSON parameters. |
+| [aws-gate](https://github.com/xen0l/aws-gate) | SSH with ephemeral keys pushed through EC2 Instance Connect; host aliases in a config file. | One profile and region per host, set up by hand. Last release in 2023. |
+| [aws-ssm-tools](https://github.com/mludvig/aws-ssm-tools) | ECS sessions, SSH, and `ssm-tunnel`, an IP link to the instance's VPC. | One profile per call (`--profile`). |
+| [taws](https://github.com/huseyinbabal/taws) | A full terminal UI for AWS, which can also open an SSM shell. | Browses one profile and region at a time. |
+| [Systems Manager unified console](https://docs.aws.amazon.com/systems-manager/latest/userguide/systems-manager-unified-console.html) | The nodes of every account of an AWS Organization, in the browser. | Needs Organizations and a delegated administrator; no terminal. |
+| Teleport, StrongDM | Access platforms: policies, approvals, recordings. | A server and agents to deploy. |
+
+hop is a client-side tool built around the whole fleet:
+
+- one inventory of every profile on your machine, queried in parallel and cached,
+  even across separate AWS Organizations, searchable by name, words, ID or IP;
+- one login per SSO portal, with expired tokens caught before connecting;
+- a session logging check before each shell, and `transcript: require` to refuse
+  unlogged sessions;
+- never acting on a fuzzy match without a question, nor on any loose match without a
+  terminal;
+- `ssh`, `scp` and `rsync` by instance name through `hop init ssh`;
+- `run` keeps the remote exit code and cancels commands the instance never picked up;
+  `push` compares the SHA-256 on both sides;
+- `hop doctor` for the local AWS setup.
+
+What hop does not do (yet): ECS or EKS sessions, ephemeral SSH keys, a VPN-like
+tunnel, or a command on many instances at once. Issues and pull requests are welcome.
 
 ## Contributing
 

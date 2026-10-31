@@ -15,6 +15,7 @@ import (
 
 	"github.com/morganseznec/hop/internal/awsconf"
 	"github.com/morganseznec/hop/internal/inventory"
+	"github.com/morganseznec/hop/internal/session"
 )
 
 type level int
@@ -88,7 +89,7 @@ func (a *app) diagnose() []finding {
 	files := a.files
 
 	// --- tools ----------------------------------------------------------------------
-	if p, err := exec.LookPath("session-manager-plugin"); err != nil {
+	if p, err := session.PluginPath(); err != nil {
 		add(finding{lvl: lvlCrit, title: "session-manager-plugin not found: no session can be opened",
 			fix: pluginFix(runtime.GOOS, false)})
 	} else if v, err := exec.Command(p, "--version").Output(); err == nil {

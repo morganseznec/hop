@@ -27,12 +27,22 @@ type Request struct {
 	PreferSSO bool
 }
 
+// PluginLocations are where the plugin installers put session-manager-plugin. PluginPath
+// looks there when it is not on PATH: editors and other desktop apps start ssh, and so
+// hop ssh-proxy, with a PATH that often leaves out /opt/homebrew/bin or /usr/local/bin.
+var PluginLocations = pluginLocations()
+
+// PluginPath finds session-manager-plugin on PATH, then in PluginLocations.
 func PluginPath() (string, error) {
-	p, err := exec.LookPath("session-manager-plugin")
-	if err != nil {
-		return "", errors.New("session-manager-plugin not found: " + pluginInstallHint)
+	if p, err := exec.LookPath("session-manager-plugin"); err == nil {
+		return p, nil
 	}
-	return p, nil
+	for _, p := range PluginLocations {
+		if p, err := exec.LookPath(p); err == nil {
+			return p, nil
+		}
+	}
+	return "", errors.New("session-manager-plugin not found: " + pluginInstallHint)
 }
 
 // Start opens the session and hands over to the plugin, like `aws ssm start-session`:

@@ -38,6 +38,8 @@ type fakeAWS struct {
 	appState, appName string
 	// lookupDenied refuses DescribeInstances narrowed to one instance.
 	lookupDenied bool
+	// sessions are the StartSession requests.
+	sessions []map[string]any
 }
 
 // inventoryCalls returns the calls made to list or look up instances, sorted: what
@@ -92,6 +94,11 @@ func (f *fakeAWS) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			f.commands = append(f.commands, cmd)
 			f.mu.Unlock()
 			io.WriteString(w, `{"Command":{"CommandId":"`+url.QueryEscape(cmd)+`"}}`)
+		case "StartSession":
+			f.mu.Lock()
+			f.sessions = append(f.sessions, req)
+			f.mu.Unlock()
+			io.WriteString(w, `{"SessionId":"acme-user-0abc","TokenValue":"fictional-session-token","StreamUrl":"wss://ssmmessages.eu-west-1.amazonaws.com/v1/data-channel/acme-user-0abc"}`)
 		case "GetCommandInvocation":
 			id, _ := url.QueryUnescape(req["CommandId"].(string))
 			out := map[string]any{"Status": "Success", "ResponseCode": 0, "StandardOutputContent": "up 1 day\n"}

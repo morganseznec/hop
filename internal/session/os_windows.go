@@ -5,6 +5,7 @@ package session
 import (
 	"os"
 	"os/signal"
+	"path/filepath"
 )
 
 // ignoreSignals keeps Ctrl-C and Ctrl-Break from ending hop until restore is called:
@@ -19,3 +20,11 @@ func ignoreSignals() (restore func()) {
 }
 
 const pluginInstallHint = "see https://docs.aws.amazon.com/systems-manager/latest/userguide/session-manager-working-with-install-plugin.html"
+
+func pluginLocations() []string {
+	dir := os.Getenv("ProgramFiles")
+	if dir == "" {
+		return nil
+	}
+	return []string{filepath.Join(dir, "Amazon", "SessionManagerPlugin", "bin", "session-manager-plugin.exe")}
+}

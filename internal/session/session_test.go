@@ -200,11 +200,36 @@ func TestDeliveryTimeout(t *testing.T) {
 	}
 }
 
-func TestPluginPathMissing(t *testing.T) {
+// noPlugin leaves session-manager-plugin nowhere to be found: not on PATH, and not
+// where the installers put it.
+func noPlugin(t *testing.T) {
+	t.Helper()
 	t.Setenv("PATH", t.TempDir())
+	saved := PluginLocations
+	PluginLocations = nil
+	t.Cleanup(func() { PluginLocations = saved })
+}
+
+func TestPluginPathMissing(t *testing.T) {
+	noPlugin(t)
 	_, err := PluginPath()
 	if err == nil || !strings.Contains(err.Error(), "session-manager-plugin not found") || !strings.Contains(err.Error(), pluginInstallHint) {
 		t.Errorf("error %v", err)
+	}
+}
+
+func TestPluginPathOutsidePATH(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("the fake plugin is a shell script")
+	}
+	noPlugin(t)
+	plugin := filepath.Join(t.TempDir(), "session-manager-plugin")
+	os.WriteFile(plugin, []byte("#!/bin/sh\n"), 0o755)
+	notExecutable := filepath.Join(t.TempDir(), "session-manager-plugin")
+	os.WriteFile(notExecutable, []byte("#!/bin/sh\n"), 0o644)
+	PluginLocations = []string{filepath.Join(t.TempDir(), "missing"), notExecutable, plugin}
+	if p, err := PluginPath(); err != nil || p != plugin {
+		t.Errorf("PluginPath() = %q, %v; want %s", p, err, plugin)
 	}
 }
 

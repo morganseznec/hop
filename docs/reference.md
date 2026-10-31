@@ -10,7 +10,7 @@ its files. Accounts, names and addresses below are fictional.
 |---|---|
 | 0 | Success. |
 | exit code of the remote command | `hop run`, when the command fails on the instance with an exit code above 0. |
-| exit code of `session-manager-plugin` | A shell or a tunnel: hop returns what the plugin returns when the session ends. |
+| exit code of `session-manager-plugin` | A shell, a tunnel or `hop ssh-proxy`: hop returns what the plugin returns when the session ends. |
 | 130 | Interrupted with Ctrl-C, or canceled: Esc in the picker, or "no" to a question. |
 | 1 | Any other error, printed on stderr as `hop: ...`. |
 
@@ -96,6 +96,7 @@ Fields marked "optional" are left out when empty.
 | `transcript: require` | The logging settings are read again before each shell, within 10 seconds, or the shell is refused. |
 | Recent instances | Listed first for 7 days, forgotten after 90 days. |
 | `hop tunnel` | A remote port below 1024 is opened 8000 above on your machine (22 becomes 8022), or on the next free port. |
+| `hop ssh-proxy` | The host ssh gives, without `.hop`, is searched like `hop <host>`, but without a terminal: only an unambiguous match connects. Port 22 unless ssh gives another. stdout carries only the SSH stream, and stderr only warnings and errors. |
 
 ## Environment variables
 

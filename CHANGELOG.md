@@ -6,6 +6,37 @@ All notable changes to hop are listed here. The format follows
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-10-31
+
+This release brings ssh, scp and rsync by instance name, and the shell integration to
+bash and fish.
+
+### Added
+
+- `hop ssh-proxy`, a `ProxyCommand` for ssh, and `hop init ssh`, which prints the
+  `~/.ssh/config` block for it. After `hop init ssh >> ~/.ssh/config`,
+  `ssh ec2-user@tools.hop` reaches the instance hop finds for `tools`, through
+  Session Manager (`AWS-StartSSHSession`), and so do `scp`, `rsync`, `git`, `sftp` and
+  editors' remote mode. ssh gives hop no terminal, so only an unambiguous match
+  connects. With `transcript: require`, hop refuses: Session Manager does not log
+  SSH. The block runs hop by its full path, since editors start ssh with a short
+  `PATH`.
+- `hop init bash` and `hop init fish`, like `hop init zsh`: completion, and an
+  optional `--alias` with the same completion. The bash version works with or without
+  the `bash-completion` package.
+- README: a comparison with other Session Manager clients, with what each does
+  better.
+
+### Changed
+
+- When `session-manager-plugin` is not on `PATH`, hop also looks where its installers
+  put it (`/opt/homebrew/bin`, `/usr/local/bin`, `/usr/local/sessionmanagerplugin/bin`,
+  `/usr/bin`, or `Program Files\Amazon\SessionManagerPlugin\bin` on Windows).
+  `hop doctor` looks there too.
+- `--alias` refuses names that start with `-`, which a shell would read as an option.
+- IAM policy in the README: `ssm:StartSession` on the `AWS-StartSSHSession` document,
+  for ssh.
+
 ## [0.1.7] - 2026-10-30
 
 This release publishes the renamed Homebrew cask through the release pipeline and
@@ -180,7 +211,8 @@ First release.
   and Arch Linux packages, and a hardened Alpine image on GHCR. The Homebrew cask
   came with v0.1.1.
 
-[Unreleased]: https://github.com/morganseznec/hop/compare/v0.1.7...HEAD
+[Unreleased]: https://github.com/morganseznec/hop/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/morganseznec/hop/compare/v0.1.7...v0.2.0
 [0.1.7]: https://github.com/morganseznec/hop/compare/v0.1.6...v0.1.7
 [0.1.6]: https://github.com/morganseznec/hop/compare/v0.1.4...v0.1.6
 [0.1.4]: https://github.com/morganseznec/hop/compare/v0.1.3...v0.1.4

@@ -185,7 +185,7 @@ func TestTerminateWithACanceledContext(t *testing.T) {
 
 func TestStartErrors(t *testing.T) {
 	t.Run("no plugin", func(t *testing.T) {
-		t.Setenv("PATH", t.TempDir())
+		noPlugin(t)
 		fake, cfg := newFake(t, startSessionOK)
 		if err := Start(context.Background(), cfg, Request{InstanceID: "i-0aaa", Region: "eu-west-1"}); err == nil || !strings.Contains(err.Error(), "not found") {
 			t.Errorf("error %v", err)
