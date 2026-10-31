@@ -329,6 +329,10 @@ func (inv *Inventory) Instances(keys []string) []Instance {
 			order[t.Profile] = len(order)
 		}
 		for _, in := range t.Instances {
+			// The GCP pair holds every project: each one sorts as a profile of its own.
+			if _, ok := order[in.Profile]; !ok {
+				order[in.Profile] = len(order)
+			}
 			id := in.Region + "|" + in.ID
 			if _, dup := copies[id]; !dup {
 				ids = append(ids, id)

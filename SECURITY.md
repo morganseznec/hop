@@ -46,3 +46,8 @@ hop never keeps or copies the values of your AWS keys: it only notes that a prof
 has keys, and hands the profile name to the AWS SDK and to `session-manager-plugin`,
 like the AWS CLI does. Error messages are scrubbed of access keys, secret keys and
 session tokens before they are printed or cached.
+
+With the experimental GCP support on, hop asks gcloud for an access token
+(`gcloud auth print-access-token`) at each refresh, keeps it in memory for the calls
+to the Compute Engine and Resource Manager APIs, and never writes it anywhere. Shells
+go through `gcloud compute ssh`, which manages its own SSH key.

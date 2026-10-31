@@ -184,6 +184,9 @@ func (a *app) checkScope() error {
 	if len(a.selectedProfiles()) > 0 || a.gcpInScope(a.f.regions) {
 		return nil
 	}
+	if a.gcpOn() && len(a.f.regions) > 0 && gcpPattern(a.f.profiles) {
+		return fmt.Errorf("-r names AWS regions, which leaves out the GCP projects of -p %s: drop -r", strings.Join(a.f.profiles, ","))
+	}
 	usable := a.files.Names()
 	if len(usable) == 0 {
 		return a.noProfiles()
@@ -225,13 +228,26 @@ func (a *app) emptyReason(all bool) string {
 		// What the same profiles hold in the regions they are queried in without -r.
 		var keys []string
 		for _, p := range a.pairsIn(nil) {
-			keys = append(keys, inventory.TargetKey(p.Profile, p.Region))
+			if p != inventory.GCPPair() { // -r leaves GCP out
+				keys = append(keys, inventory.TargetKey(p.Profile, p.Region))
+			}
 		}
 		if n := len(a.filter(a.inv.Instances(keys), all)); n > 0 {
 			return fmt.Sprintf("-r %s filters out %s in the profiles' own regions", strings.Join(a.f.regions, ","), plural(n, "instance"))
 		}
 		return ""
 	}
+	// -p gcp:<project> narrows the GCP pair to some projects.
+	var scoped []inventory.Instance
+	for _, in := range cached {
+		if !in.GCP() || !a.gcpFiltered(in) {
+			scoped = append(scoped, in)
+		}
+	}
+	if len(scoped) == 0 {
+		return fmt.Sprintf("-p %s matches none of the %s", strings.Join(a.f.profiles, ","), plural(len(cached), "GCP instance"))
+	}
+	cached = scoped
 	inEnv := a.filter(cached, true)
 	switch {
 	case len(inEnv) == 0:
@@ -344,14 +360,15 @@ func (a *app) stale(force bool) []inventory.Pair { return a.olderThan(a.cfg.TTL(
 
 // olderThan returns the pairs in scope whose data is older than maxAge, or all of them
 // with force. A pair already queried during this call is never queried again, and a
-// background refresh leaves out credential_process profiles. A pair recorded as needing
+// background refresh leaves out credential_process profiles and GCP (gcloud, a console
+// program, would open a window on Windows). A pair recorded as needing
 // an MFA code (see refresh) stays as is until mfa_serial goes from its profile.
 func (a *app) olderThan(maxAge time.Duration, force bool) []inventory.Pair {
 	now := time.Now()
 	var todo []inventory.Pair
 	for _, p := range a.pairs() {
 		key := inventory.TargetKey(p.Profile, p.Region)
-		if a.fetched[key] || (a.background && a.usesProcess(p.Profile)) {
+		if a.fetched[key] || (a.background && (a.usesProcess(p.Profile) || p == inventory.GCPPair())) {
 			continue
 		}
 		t, ok := a.inv.Targets[key]

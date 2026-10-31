@@ -6,6 +6,8 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/morganseznec/hop/internal/awsconf"
+	"github.com/morganseznec/hop/internal/config"
+	"github.com/morganseznec/hop/internal/inventory"
 )
 
 // Completions read the cache without waiting for the network. Options already typed
@@ -70,6 +72,9 @@ func completeProfiles(cmd *cobra.Command, args []string, toComplete string) ([]s
 		if p.Usable() {
 			out = append(out, p.Name+"\t"+joinNonEmpty(", ", p.Kind.String(), p.Region))
 		}
+	}
+	if cfg, err := config.Load(); err == nil && len(cfg.GCPProjects) > 0 {
+		out = append(out, inventory.GCP+"\tGCP projects (experimental)")
 	}
 	return out, cobra.ShellCompDirectiveNoFileComp
 }

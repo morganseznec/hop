@@ -12,6 +12,7 @@ import (
 	"os/exec"
 	"path"
 	"regexp"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -137,6 +138,9 @@ func newGCPClient(ctx context.Context) (*gcpClient, error) {
 	var stderr bytes.Buffer
 	cmd := exec.CommandContext(ctx, gcloud, "auth", "print-access-token")
 	cmd.Stderr = &stderr
+	// On Windows, gcloud.cmd runs Python as a child that the context does not kill: stop
+	// waiting for its output anyway.
+	cmd.WaitDelay = time.Second
 	out, err := cmd.Output()
 	if err != nil {
 		// gcloud explains on its first line, after "ERROR: (gcloud.auth...)".
@@ -158,7 +162,13 @@ func newGCPClient(ctx context.Context) (*gcpClient, error) {
 // wildcard, or else the active projects the account can see that match them.
 func (c *gcpClient) projects(ctx context.Context, patterns []string) ([]string, error) {
 	if !strings.ContainsAny(strings.Join(patterns, ""), "*?[") {
-		return patterns, nil
+		var out []string
+		for _, p := range patterns {
+			if !slices.Contains(out, p) {
+				out = append(out, p)
+			}
+		}
+		return out, nil
 	}
 	var out []string
 	q := url.Values{"filter": {"lifecycleState:ACTIVE"}, "pageSize": {"500"}}
@@ -203,15 +213,20 @@ func (c *gcpClient) instances(ctx context.Context, project string) ([]Instance, 
 			Items map[string]struct {
 				Instances []gcpInstance `json:"instances"`
 			} `json:"items"`
-			NextPageToken string `json:"nextPageToken"`
+			NextPageToken string   `json:"nextPageToken"`
+			Unreachables  []string `json:"unreachables"`
 		}
 		u := fmt.Sprintf("%s/compute/v1/projects/%s/aggregated/instances?%s", GCPEndpoints.Compute, url.PathEscape(project), q.Encode())
 		if err := c.get(ctx, u, &page); err != nil {
 			var api *gcpError
-			if errors.As(err, &api) && api.Status == http.StatusForbidden {
+			if errors.As(err, &api) && api.Status == http.StatusForbidden && !api.rateLimited() {
 				return nil, nil
 			}
 			return nil, err
+		}
+		// A zone that did not answer would look empty: keep the instances seen before.
+		if len(page.Unreachables) > 0 {
+			return nil, fmt.Errorf("not reachable: %s", strings.Join(page.Unreachables, ", "))
 		}
 		for _, scope := range page.Items {
 			for _, g := range scope.Instances {
@@ -245,10 +260,18 @@ func (c *gcpClient) get(ctx context.Context, u string, v any) error {
 		var parsed struct {
 			Error struct {
 				Message string `json:"message"`
+				Status  string `json:"status"`
+				Errors  []struct {
+					Reason string `json:"reason"`
+				} `json:"errors"`
 			} `json:"error"`
 		}
 		if json.Unmarshal(body, &parsed) == nil {
 			e.Message = clean(parsed.Error.Message)
+			e.Reason = parsed.Error.Status
+			if len(parsed.Error.Errors) > 0 {
+				e.Reason += " " + parsed.Error.Errors[0].Reason
+			}
 		}
 		return e
 	}
@@ -259,6 +282,15 @@ func (c *gcpClient) get(ctx context.Context, u string, v any) error {
 type gcpError struct {
 	Status  int
 	Message string
+	// Reason is the error status and reason, as Google gives them.
+	Reason string
+}
+
+// rateLimited reports a quota or rate limit, which some Google APIs answer with 403:
+// that project is not to be skipped as unreadable.
+func (e *gcpError) rateLimited() bool {
+	r := strings.ToLower(e.Reason)
+	return strings.Contains(r, "ratelimit") || strings.Contains(r, "quota") || strings.Contains(r, "resource_exhausted")
 }
 
 func (e *gcpError) Error() string {

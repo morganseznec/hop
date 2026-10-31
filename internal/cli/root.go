@@ -87,7 +87,11 @@ With no argument, it opens a picker over the instances of every AWS profile on t
 machine, each queried in its own region plus its extra_regions ("hop scan" finds the
 others). With words, it searches: "hop shop app", "hop tools", "hop i-0abc12..." or
 "hop 10.0.1.21". A single instance found by its exact name, ID or IP, or by whole
-words of its name, connects directly; a looser match asks first.`,
+words of its name, connects directly; a looser match asks first.
+
+GCP, experimental: with gcp_projects in hop's configuration, the Compute Engine
+instances of those projects show up too, as gcp:<project>, and hop opens shells on
+them through IAP with gcloud.`,
 		Example: `  hop                         picker over the whole fleet
   hop shop tools              search by words
   hop -p 'shop-*' -e prod     limit to shop-* profiles, in prod
@@ -209,8 +213,8 @@ func (a *app) transcriptGate(ctx context.Context, cfg aws.Config, in inventory.I
 }
 
 // newRefresh is the background refresh started by completion, with the -p and -r
-// typed so far. It skips credential_process profiles: a detached process must not
-// run a password manager or open a window.
+// typed so far. It skips credential_process profiles and GCP: a detached process must
+// not run a password manager or open a window.
 func newRefresh(f *filters) *cobra.Command {
 	return &cobra.Command{
 		Use:    "__refresh",

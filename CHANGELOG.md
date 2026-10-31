@@ -6,6 +6,18 @@ All notable changes to hop are listed here. The format follows
 
 ## [Unreleased]
 
+### Fixed
+
+- GCP (experimental): instances sort after the AWS ones, grouped by project, instead of
+  among the first AWS profile's. Tab completion no longer starts gcloud in the
+  background, which would open a console window on Windows. A project answering 403
+  for a quota, or a zone that does not answer, is reported instead of looking empty.
+  `-p gcp:<project>` that matches nothing, and `-p gcp` with `-r`, now say so. The
+  gcloud token is no longer waited for past the timeout on Windows, and a project
+  listed twice is queried once. `-p` completion offers `gcp`.
+- The documentation covers GCP in the Docker notes, the security notes, exit codes,
+  limits and environment variables, and `hop --help`.
+
 ## [0.3.0] - 2026-10-31
 
 This release adds experimental GCP support: hop finds Compute Engine instances across

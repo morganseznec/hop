@@ -7,10 +7,13 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/spf13/cobra"
 
 	"github.com/morganseznec/hop/internal/config"
 	"github.com/morganseznec/hop/internal/inventory"
@@ -290,5 +293,54 @@ func TestGCPDoctor(t *testing.T) {
 	out, _, _ = runHop(t, "doctor")
 	if !strings.Contains(out, "gcloud not found: the GCP projects of gcp_projects cannot be listed") {
 		t.Errorf("without gcloud:\n%s", out)
+	}
+}
+
+func TestGCPProfileCompletion(t *testing.T) {
+	gcpEnv(t, "*")
+	profiles, _ := completeProfiles(&cobra.Command{}, nil, "")
+	if !slices.Contains(profiles, "gcp\tGCP projects (experimental)") {
+		t.Errorf("-p completion: %q", profiles)
+	}
+}
+
+func TestGCPSortsAfterAWSByProject(t *testing.T) {
+	gcpEnv(t, "*")
+	out, _, err := runHop(t, "ls")
+	if err != nil {
+		t.Fatal(err)
+	}
+	pos := func(s string) int { return strings.Index(out, s) }
+	// globex (AWS) comes before every GCP project, and the projects stay grouped.
+	aws, shop, ops := pos("globex "), pos("gcp:acme-shop"), pos("gcp:globex-ops")
+	if aws < 0 || shop < aws || ops < shop {
+		t.Errorf("order:\n%s", out)
+	}
+}
+
+func TestGCPExplainsAnEmptyScope(t *testing.T) {
+	gcpEnv(t, "*")
+	_, stderr, _ := runHop(t, "ls", "-p", "gcp:nosuch")
+	if !strings.Contains(stderr, "-p gcp:nosuch matches none of the 3 GCP instances") {
+		t.Errorf("-p gcp:nosuch:\n%s", stderr)
+	}
+	_, _, err := runHop(t, "ls", "-p", "gcp", "-r", "eu-west-1")
+	if err == nil || !strings.Contains(err.Error(), "-r names AWS regions, which leaves out the GCP projects of -p gcp: drop -r") {
+		t.Errorf("-p gcp -r eu-west-1: %v", err)
+	}
+}
+
+func TestGCPLeftOutOfTheBackgroundRefresh(t *testing.T) {
+	gcpEnv(t, "*")
+	a, err := newApp(filters{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Contains(a.olderThan(0, true), inventory.GCPPair()) {
+		t.Fatal("GCP must be refreshed in the foreground")
+	}
+	a.background = true
+	if slices.Contains(a.olderThan(0, true), inventory.GCPPair()) {
+		t.Error("a background refresh runs gcloud")
 	}
 }
