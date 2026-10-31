@@ -133,6 +133,9 @@ func connect(ctx context.Context, f filters, args []string) error {
 	if err != nil {
 		return err
 	}
+	if in.GCP() {
+		return a.shellGCP(in)
+	}
 	if err := a.transcriptGate(ctx, cfg, in); err != nil {
 		return err
 	}

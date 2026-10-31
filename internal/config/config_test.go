@@ -141,6 +141,7 @@ func TestLoadErrors(t *testing.T) {
 		{"misspelt key", "include: [acme-*]\nexlude: [acme-sandbox]\n", "exlude"},
 		{"invalid include pattern", "include: [acme-*, \"acme-[\"]\n", `invalid pattern in include: "acme-["`},
 		{"invalid exclude pattern", "exclude: ['acme-\\']\n", `invalid pattern in exclude: "acme-\\"`},
+		{"invalid gcp_projects pattern", "gcp_projects: [\"acme-[\"]\n", `invalid pattern in gcp_projects: "acme-["`},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {

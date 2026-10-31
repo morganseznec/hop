@@ -403,6 +403,43 @@ hop does not prompt for MFA codes yet: a profile that assumes a role with `mfa_s
 `hop doctor`. Use a profile without MFA for these accounts, or get the credentials from
 [aws-vault](https://github.com/99designs/aws-vault) or another `credential_process`.
 
+## GCP (experimental)
+
+hop can also list the Compute Engine instances of your GCP projects and open a shell on
+them through [IAP](https://cloud.google.com/iap/docs/using-tcp-forwarding), with no
+external IP and no bastion. It is a first step, not yet at the level of AWS:
+
+| | AWS | GCP (experimental) |
+|---|---|---|
+| Search across accounts or projects | yes | yes |
+| Shell | Session Manager | `gcloud compute ssh --tunnel-through-iap` |
+| Session logging check | yes | no: GCP does not record shell sessions |
+| `run`, `tunnel`, `push`, ssh by name | yes | not yet: hop prints the gcloud command instead |
+
+Turn it on in hop's configuration:
+
+```yaml
+# Every project gcloud's account can see, or a list; glob patterns allowed.
+gcp_projects: ["*"]
+```
+
+hop needs the [Google Cloud CLI](https://cloud.google.com/sdk/docs/install) and uses
+its active account (`gcloud auth login`). It lists the instances with
+`compute.instances.list` (and `"*"` lists the projects you can see), and checks one
+with `compute.instances.get` before a shell when the inventory is more than a minute
+old. A project where Compute Engine is off, or whose instances you may not list, is
+skipped. The shell needs what `gcloud compute ssh --tunnel-through-iap` needs: the
+IAP-secured Tunnel User role, a firewall rule that lets IAP (`35.235.240.0/20`) reach
+port 22, and OS Login or project SSH keys.
+
+GCP instances show up as `gcp:<project>`, in their zone: `hop ls -p gcp` lists only
+them, `hop ls -p 'gcp:shop-*'` those of some projects. With `transcript: require`, hop
+refuses GCP shells, since nothing records them.
+
+Do you use hop on GCP, or would you on Azure? Say what you need in
+[GitHub Discussions](https://github.com/morganseznec/hop/discussions): that is what
+decides how far this goes.
+
 ## Configuration
 
 Optional, in `~/.config/hop/config.yaml` (`%AppData%\hop\config.yaml` on Windows,
@@ -428,6 +465,9 @@ cache_ttl: 15m
 # Labels shown next to the profile, and searchable: "hop ACME tools".
 labels:
   acme-prod: ACME
+
+# GCP projects to list as well (experimental, see GCP above).
+gcp_projects: ["*"]
 ```
 
 `hop scan --write` rewrites this file to add regions: comments are not kept, and the

@@ -120,12 +120,12 @@ The AWS SDK reads its own variables too (for example `HTTPS_PROXY` or
 | Column | Values |
 |---|---|
 | `NAME` | `Name` tag, or the instance ID. |
-| `PROFILE` | Profile, followed by its label in parentheses when `labels:` sets one. |
-| `REGION` | Region the instance was found in. |
+| `PROFILE` | Profile, followed by its label in parentheses when `labels:` sets one. `gcp:<project>` for a GCP instance (experimental). |
+| `REGION` | Region the instance was found in; the zone for a GCP instance. |
 | `ENV` | `prod`, `test`, or empty. |
 | `IP` | Private IP address. |
-| `AGENT` | `online`: the SSM agent answers. `lost 3h ago`: connection lost, with its last contact. `inactive` (or another status, in lower case): registered but not reachable. `none`: the agent states were read, and none is registered for this instance. `?`: the agent states could not be read (permissions, timeout), so hop does not know. With `--all`, a stopped instance shows its state here instead. |
-| `LOGGING` | `yes`: the account logs shells in that region (CloudWatch Logs or S3). `NO`: it does not, or has no Session Manager preferences at all. `?`: not checked, because the `SSM-SessionManagerRunShell` document could not be read (permissions, network) or that region was never queried. |
+| `AGENT` | `online`: the SSM agent answers. `lost 3h ago`: connection lost, with its last contact. `inactive` (or another status, in lower case): registered but not reachable. `none`: the agent states were read, and none is registered for this instance. `?`: the agent states could not be read (permissions, timeout), so hop does not know. With `--all`, a stopped instance shows its state here instead. `-` for a GCP instance, reached through IAP. |
+| `LOGGING` | `yes`: the account logs shells in that region (CloudWatch Logs or S3). `NO`: it does not, or has no Session Manager preferences at all. `?`: not checked, because the `SSM-SessionManagerRunShell` document could not be read (permissions, network) or that region was never queried. `-` for a GCP instance: GCP does not record shell sessions. |
 
 The footer, on stderr, counts instances, profiles and regions, and says how old the
 cache is.
