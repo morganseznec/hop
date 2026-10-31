@@ -84,6 +84,8 @@ signs:
     args: ["sign-blob", "--bundle=${signature}", "--yes", "${artifact}"]
     output: true
 
+# Releases use the CHANGELOG.md section of the tag instead (see release.yml): this one
+# only serves snapshot builds.
 changelog:
   sort: asc
   filters:
