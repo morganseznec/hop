@@ -6,6 +6,11 @@ All notable changes to hop are listed here. The format follows
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-10-31
+
+This release adds experimental GCP support: hop finds Compute Engine instances across
+your GCP projects and opens shells on them through IAP.
+
 ### Added
 
 - GCP support, experimental: with `gcp_projects` in the configuration (`["*"]` for every
@@ -16,6 +21,9 @@ All notable changes to hop are listed here. The format follows
   sessions: hop says so, and `transcript: require` refuses them. `run`, `tunnel`,
   `push` and `ssh-proxy` are AWS only for now: on a GCP instance they print the
   gcloud command that does it. `hop doctor` checks gcloud.
+- An animated demo in the README and on the site, recorded with VHS against a
+  fictional fleet (`docs/demo`). It replaces the site's typed mockup, which showed a
+  line hop never prints.
 
 ## [0.2.0] - 2026-10-31
 
@@ -222,7 +230,8 @@ First release.
   and Arch Linux packages, and a hardened Alpine image on GHCR. The Homebrew cask
   came with v0.1.1.
 
-[Unreleased]: https://github.com/morganseznec/hop/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/morganseznec/hop/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/morganseznec/hop/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/morganseznec/hop/compare/v0.1.7...v0.2.0
 [0.1.7]: https://github.com/morganseznec/hop/compare/v0.1.6...v0.1.7
 [0.1.6]: https://github.com/morganseznec/hop/compare/v0.1.4...v0.1.6
