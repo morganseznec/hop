@@ -1032,3 +1032,26 @@ func TestPushRemoteFailure(t *testing.T) {
 		t.Errorf("error %v, output %+v", err, out)
 	}
 }
+
+func TestStartGCPChecksTheNames(t *testing.T) {
+	// A fake gcloud that would record a call: none must happen.
+	if runtime.GOOS == "windows" {
+		t.Skip("the fake gcloud is a shell script")
+	}
+	bin, out := t.TempDir(), filepath.Join(t.TempDir(), "called")
+	os.WriteFile(filepath.Join(bin, "gcloud"), []byte("#!/bin/sh\ntouch "+out+"\n"), 0o755)
+	t.Setenv("PATH", bin)
+	for _, c := range [][3]string{
+		{"acme-shop", "europe-west1-b", "-oProxyCommand=sh"},
+		{"acme-shop", "--zone=x", "web"},
+		{"--impersonate-service-account=x", "europe-west1-b", "web"},
+		{"acme shop", "europe-west1-b", "web"},
+	} {
+		if err := StartGCP(c[0], c[1], c[2]); err == nil || !strings.Contains(err.Error(), "invalid GCP instance") {
+			t.Errorf("%q: %v", c, err)
+		}
+	}
+	if _, err := os.Stat(out); err == nil {
+		t.Error("gcloud ran")
+	}
+}

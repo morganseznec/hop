@@ -102,6 +102,9 @@ func (a *app) diagnose() []finding {
 			add(finding{lvl: lvlOK, title: "session-manager-plugin " + ver})
 		}
 	}
+	if a.gcpOn() {
+		a.diagnoseGCP(add)
+	}
 	if _, err := exec.LookPath("aws"); err != nil {
 		add(finding{lvl: lvlInfo, title: "aws CLI not found: hop cannot open SSO portals (hop login, or when a token expires)",
 			fix: []string{"install the AWS CLI v2: https://docs.aws.amazon.com/cli/latest/userguide/getting-started-install.html"}})
@@ -265,6 +268,9 @@ func (a *app) diagnose() []finding {
 	var causes []inventory.ErrKind
 	nFailed := 0
 	for _, k := range a.keys() {
+		if k == inventory.GCPPair().Key() {
+			continue // see diagnoseGCP
+		}
 		t, ok := a.inv.Targets[k]
 		if !ok {
 			unknown = append(unknown, strings.ReplaceAll(k, "|", " "))

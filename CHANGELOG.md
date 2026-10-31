@@ -6,6 +6,17 @@ All notable changes to hop are listed here. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- GCP support, experimental: with `gcp_projects` in the configuration (`["*"]` for every
+  project gcloud's account can see), `hop ls` and the search list the Compute Engine
+  instances of those projects as `gcp:<project>`, in their zone, and `hop <name>`
+  opens a shell through IAP with `gcloud compute ssh --tunnel-through-iap`, after
+  checking that the instance is still the one listed. GCP does not record shell
+  sessions: hop says so, and `transcript: require` refuses them. `run`, `tunnel`,
+  `push` and `ssh-proxy` are AWS only for now: on a GCP instance they print the
+  gcloud command that does it. `hop doctor` checks gcloud.
+
 ## [0.2.0] - 2026-10-31
 
 This release brings ssh, scp and rsync by instance name, and the shell integration to

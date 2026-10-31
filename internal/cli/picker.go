@@ -87,18 +87,25 @@ func (a *app) preview(in inventory.Instance) string {
 	row("env", in.Env)
 	row("private IP", in.PrivateIP)
 	row("platform", in.Platform)
-	agent := in.Agent
-	switch {
-	case agent == "" && a.target(in) != nil && a.target(in).AgentsKnown:
-		agent = "none"
-	case agent == "":
-		agent = "unknown"
-	case !in.LastPing.IsZero():
-		agent += ", " + ago(in.LastPing)
+	if in.GCP() {
+		row("connection", "IAP, with gcloud compute ssh")
+		row("logging", "no: GCP does not record shell sessions")
+	} else {
+		agent := in.Agent
+		switch {
+		case agent == "" && a.target(in) != nil && a.target(in).AgentsKnown:
+			agent = "none"
+		case agent == "":
+			agent = "unknown"
+		case !in.LastPing.IsZero():
+			agent += ", " + ago(in.LastPing)
+		}
+		row("SSM agent", agent)
+		if t := a.target(in); t != nil {
+			row("logging", transcriptText(t.Transcript))
+		}
 	}
-	row("SSM agent", agent)
 	if t := a.target(in); t != nil {
-		row("logging", transcriptText(t.Transcript))
 		row("inventory", ago(t.FetchedAt))
 	}
 	if len(in.AlsoVia) > 0 {

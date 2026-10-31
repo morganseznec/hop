@@ -143,6 +143,9 @@ func (a *app) printTable(items []inventory.Instance) {
 }
 
 func (a *app) agentCell(in inventory.Instance) cell {
+	if in.GCP() {
+		return cell{"-", cDim}
+	}
 	switch {
 	case in.Online():
 		return cell{"online", cGreen}
@@ -158,6 +161,9 @@ func (a *app) agentCell(in inventory.Instance) cell {
 }
 
 func (a *app) transcriptCell(in inventory.Instance) cell {
+	if in.GCP() {
+		return cell{"-", cDim}
+	}
 	t := a.target(in)
 	switch {
 	case t == nil || !t.Transcript.Checked:

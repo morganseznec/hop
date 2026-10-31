@@ -11,6 +11,7 @@ import (
 	"slices"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -58,7 +59,11 @@ func newApp(f filters) (*app, error) {
 	}
 	a := &app{files: files, cfg: cfg, inv: inventory.Load(), recents: state.LoadRecents(), f: f}
 	// The pairs of a profile removed from the AWS files leave the cache at the next save.
-	a.inv.Retain(files.Names())
+	retain := files.Names()
+	if a.gcpOn() {
+		retain = append(retain, inventory.GCP)
+	}
+	a.inv.Retain(retain)
 	if err := a.checkProfiles(); err != nil {
 		return nil, err
 	}
@@ -137,10 +142,14 @@ func matchAny(patterns []string, name string) bool {
 
 // checkProfiles rejects a -p that matches nothing, suggesting the closest profile.
 func (a *app) checkProfiles() error {
-	if len(a.f.profiles) > 0 && len(a.files.Names()) == 0 {
+	if len(a.f.profiles) > 0 && len(a.files.Names()) == 0 && !a.gcpOn() {
 		return a.noProfiles()
 	}
 	for _, want := range a.f.profiles {
+		gcp := gcpPattern([]string{want})
+		if gcp && a.gcpOn() {
+			continue
+		}
 		found := false
 		for _, p := range a.files.Profiles {
 			if matchAny([]string{want}, p.Name) {
@@ -150,7 +159,9 @@ func (a *app) checkProfiles() error {
 		}
 		if !found {
 			msg := fmt.Sprintf("unknown profile: %s", want)
-			if s := closest(want, a.files.Names()); s != "" {
+			if gcp {
+				msg += fmt.Sprintf(" (GCP is off: list the projects in gcp_projects in %s)", configFile())
+			} else if s := closest(want, a.files.Names()); s != "" {
 				msg += fmt.Sprintf(" (did you mean %s?)", s)
 			}
 			return errors.New(msg)
@@ -170,7 +181,7 @@ func (a *app) noProfiles() error {
 // credentials at all (a first run), or none left by -p, or by include and exclude in
 // hop's configuration.
 func (a *app) checkScope() error {
-	if len(a.selectedProfiles()) > 0 {
+	if len(a.selectedProfiles()) > 0 || a.gcpInScope(a.f.regions) {
 		return nil
 	}
 	usable := a.files.Names()
@@ -247,6 +258,9 @@ func (a *app) pairsIn(regions []string) []inventory.Pair {
 		for _, r := range rs {
 			out = append(out, inventory.Pair{Profile: p.Name, Region: r, PreferSSO: p.PreferSSO()})
 		}
+	}
+	if a.gcpInScope(regions) {
+		out = append(out, inventory.GCPPair())
 	}
 	return out
 }
@@ -371,7 +385,18 @@ func (a *app) refresh(ctx context.Context, todo []inventory.Pair) error {
 	}
 	var query []inventory.Pair
 	var results []*inventory.Target
+	// The GCP projects are queried alongside the AWS pairs.
+	var gcp *inventory.Target
+	var wg sync.WaitGroup
 	for _, p := range todo {
+		if p == inventory.GCPPair() {
+			wg.Go(func() {
+				cctx, cancel := context.WithTimeout(ctx, 25*time.Second)
+				defer cancel()
+				gcp = inventory.FetchGCP(cctx, a.cfg.GCPProjects)
+			})
+			continue
+		}
 		if m := a.files.MFAProfile(p.Profile); m != nil {
 			results = append(results, &inventory.Target{Profile: p.Profile, Region: p.Region,
 				Err: mfaError(p.Profile, m).Error(), ErrKind: inventory.ErrMFA, ErrAt: time.Now()})
@@ -389,6 +414,10 @@ func (a *app) refresh(ctx context.Context, todo []inventory.Pair) error {
 		if stderrTTY {
 			fmt.Fprint(os.Stderr, "\r\033[K")
 		}
+	}
+	wg.Wait()
+	if gcp != nil {
+		results = append(results, gcp)
 	}
 	if err := ctx.Err(); err != nil {
 		return err
@@ -449,6 +478,9 @@ func (a *app) filter(items []inventory.Instance, all bool) []inventory.Instance 
 		if a.f.env != "" && in.Env != a.f.env {
 			continue
 		}
+		if in.GCP() && a.gcpFiltered(in) {
+			continue
+		}
 		if !all && !in.Running() {
 			continue
 		}
@@ -458,6 +490,9 @@ func (a *app) filter(items []inventory.Instance, all bool) []inventory.Instance 
 }
 
 func (a *app) target(in inventory.Instance) *inventory.Target {
+	if in.GCP() {
+		return a.inv.Targets[inventory.TargetKey(inventory.GCP, inventory.GCPScope)]
+	}
 	return a.inv.Targets[inventory.TargetKey(in.Profile, in.Region)]
 }
 
@@ -469,9 +504,14 @@ func (a *app) reportProblems() {
 	other := map[inventory.ErrKind][]failure{}
 	var kinds []inventory.ErrKind
 	seen := map[string]bool{}
+	gcpErr := ""
 	for _, k := range a.keys() {
 		t, ok := a.inv.Targets[k]
 		if !ok || t.Err == "" {
+			continue
+		}
+		if k == inventory.GCPPair().Key() {
+			gcpErr = t.Err
 			continue
 		}
 		label := t.Profile
@@ -531,6 +571,9 @@ func (a *app) reportProblems() {
 		case inventory.ErrNetwork:
 			hint("check the network, VPN or proxy, then hop ls --refresh")
 		}
+	}
+	if gcpErr != "" {
+		a.reportGCP(gcpErr)
 	}
 }
 
@@ -790,6 +833,10 @@ func (a *app) reach(ctx context.Context, args []string, why purpose) (inventory.
 	for retried := false; ; retried = true {
 		in, asked, err := a.resolve(ctx, args, why)
 		if err != nil {
+			return in, aws.Config{}, err
+		}
+		if in.GCP() {
+			in, err := a.reachGCP(ctx, in, why)
 			return in, aws.Config{}, err
 		}
 		// A Windows instance is refused before signing in or looking it up.

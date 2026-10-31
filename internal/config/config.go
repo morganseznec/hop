@@ -41,6 +41,10 @@ type Config struct {
 	CacheTTL string `yaml:"cache_ttl,omitempty"`
 	// Customer label shown next to the profile (acme-prod: ACME).
 	Labels map[string]string `yaml:"labels,omitempty"`
+	// GCP projects whose Compute Engine instances hop lists, glob patterns allowed ("*":
+	// every project gcloud's account can see). Setting it turns on the experimental GCP
+	// support.
+	GCPProjects []string `yaml:"gcp_projects,omitempty"`
 }
 
 // Dir returns the folder of the configuration. Without a home directory (HOME unset)
@@ -95,7 +99,7 @@ func Load() (*Config, error) {
 	for _, list := range []struct {
 		key      string
 		patterns []string
-	}{{"include", c.Include}, {"exclude", c.Exclude}} {
+	}{{"include", c.Include}, {"exclude", c.Exclude}, {"gcp_projects", c.GCPProjects}} {
 		for _, pat := range list.patterns {
 			if _, err := path.Match(pat, ""); err != nil {
 				return nil, fmt.Errorf("%s: invalid pattern in %s: %q", p, list.key, pat)
