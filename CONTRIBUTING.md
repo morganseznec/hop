@@ -18,8 +18,8 @@ make lint     # golangci-lint, same version as CI
 make build    # ./bin/hop
 ```
 
-Tests never call AWS. Keep it that way: put AWS calls behind small functions and test
-the logic around them with plain data.
+Tests never call AWS or GCP. Keep it that way: put cloud calls behind small functions
+and test the logic around them with plain data, or against a local server.
 
 When you try your change against real accounts, use accounts you own or are allowed
 to use, and prefer `hop ls` and `hop doctor`, which are read-only.

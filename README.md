@@ -171,6 +171,8 @@ built from source, on Alpine, as a non-root user, without a package manager.
   tokens there.
 - hop's own configuration is read from `/home/hop/.config/hop/config.yaml`: add
   `-v ~/.config/hop:/home/hop/.config/hop:ro` to use yours.
+- The image has no Google Cloud CLI either: the experimental GCP support needs hop
+  installed on the host.
 - It also runs with `--read-only --tmpfs /tmp --cap-drop ALL --security-opt no-new-privileges`.
 - Port forwarding needs `--network host` (Linux only), since the plugin listens on the
   container's localhost.

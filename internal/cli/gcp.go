@@ -85,7 +85,8 @@ func gcpAlternative(why purpose, in inventory.Instance) string {
 	args := strings.Join(session.GCPArgs(in.Project(), in.Region), " ")
 	switch why {
 	case forTunnel:
-		return fmt.Sprintf("gcloud compute start-iap-tunnel %s <port> --local-host-port=localhost:<port> --project=%s --zone=%s", in.Name, in.Project(), in.Region)
+		return fmt.Sprintf("gcloud compute start-iap-tunnel %s <port> --local-host-port=localhost:<port> --project=%s --zone=%s (as an ssh ProxyCommand: --listen-on-stdin instead of --local-host-port)",
+			in.Name, in.Project(), in.Region)
 	case forPush:
 		return fmt.Sprintf("gcloud compute scp <file> %s:<path> %s", in.Name, args)
 	}
@@ -95,8 +96,11 @@ func gcpAlternative(why purpose, in inventory.Instance) string {
 // reportGCP explains a failed GCP inventory: most often, gcloud wants a new login.
 func (a *app) reportGCP(err string) {
 	warn("GCP projects not queried: %s", shortError(err))
-	if !strings.Contains(err, "gcloud not found") {
+	switch {
+	case strings.Contains(err, "gcloud auth") || strings.Contains(err, "gcloud token"):
 		hint("gcloud auth login, then hop ls --refresh")
+	case !strings.Contains(err, "gcloud not found"):
+		hint("the instances listed before stay shown; hop queries GCP again in a minute")
 	}
 }
 

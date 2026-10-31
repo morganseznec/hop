@@ -11,6 +11,7 @@ its files. Accounts, names and addresses below are fictional.
 | 0 | Success. |
 | exit code of the remote command | `hop run`, when the command fails on the instance with an exit code above 0. |
 | exit code of `session-manager-plugin` | A shell, a tunnel or `hop ssh-proxy`: hop returns what the plugin returns when the session ends. |
+| exit code of `gcloud compute ssh` | A shell on a GCP instance (experimental). |
 | 130 | Interrupted with Ctrl-C, or canceled: Esc in the picker, or "no" to a question. |
 | 1 | Any other error, printed on stderr as `hop: ...`. |
 
@@ -93,6 +94,7 @@ Fields marked "optional" are left out when empty.
 | Inventory cache | 15 minutes (`cache_ttl`). A profile and region whose query failed is retried after one minute. |
 | Freshness before acting | An instance whose data is more than one minute old is looked up again before hop acts on it. |
 | Inventory queries | 16 profile/region pairs at a time, 25 seconds each at most. |
+| GCP inventory (experimental) | 16 projects at a time, 25 seconds in all. A GCP instance listed more than one minute ago is read again (15 seconds at most) before a shell. |
 | `transcript: require` | The logging settings are read again before each shell, within 10 seconds, or the shell is refused. |
 | Recent instances | Listed first for 7 days, forgotten after 90 days. |
 | `hop tunnel` | A remote port below 1024 is opened 8000 above on your machine (22 becomes 8022), or on the next free port. |
@@ -113,7 +115,8 @@ Fields marked "optional" are left out when empty.
 
 The AWS SDK reads its own variables too (for example `HTTPS_PROXY` or
 `AWS_ENDPOINT_URL_SSM`), and hop hands the SSM endpoint it resolved to
-`session-manager-plugin`.
+`session-manager-plugin`. With GCP on, gcloud reads its own as well (for example
+`CLOUDSDK_CONFIG` or `CLOUDSDK_CORE_ACCOUNT`): hop uses whatever account gcloud uses.
 
 ## `hop ls` columns
 

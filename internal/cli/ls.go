@@ -28,7 +28,7 @@ reason is printed on stderr.
 AGENT is the SSM agent: online, lost (with its last contact), inactive, none, or ?
 when it could not be read; a stopped instance (--all) shows its state there. LOGGING
 says whether the account logs sessions in that region: yes, NO, or ? when it could
-not be checked.`,
+not be checked. Both show - for a GCP instance (experimental, see gcp_projects).`,
 		Example: `  hop ls
   hop ls shop               filter by words, like the search
   hop ls -e test --all      test instances, stopped ones included
