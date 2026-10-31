@@ -437,8 +437,8 @@ them, `hop ls -p 'gcp:shop-*'` those of some projects. With `transcript: require
 refuses GCP shells, since nothing records them.
 
 Do you use hop on GCP, or would you on Azure? Say what you need in
-[GitHub Discussions](https://github.com/morganseznec/hop/discussions): that is what
-decides how far this goes.
+[the GCP and Azure discussion](https://github.com/morganseznec/hop/discussions/19):
+that is what decides how far this goes.
 
 ## Configuration
 
