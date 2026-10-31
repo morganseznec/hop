@@ -6,6 +6,10 @@ All notable changes to hop are listed here. The format follows
 
 ## [Unreleased]
 
+## [0.3.1] - 2026-10-31
+
+Fixes from an audit of the experimental GCP support.
+
 ### Fixed
 
 - GCP (experimental): instances sort after the AWS ones, grouped by project, instead of
@@ -242,7 +246,8 @@ First release.
   and Arch Linux packages, and a hardened Alpine image on GHCR. The Homebrew cask
   came with v0.1.1.
 
-[Unreleased]: https://github.com/morganseznec/hop/compare/v0.3.0...HEAD
+[Unreleased]: https://github.com/morganseznec/hop/compare/v0.3.1...HEAD
+[0.3.1]: https://github.com/morganseznec/hop/compare/v0.3.0...v0.3.1
 [0.3.0]: https://github.com/morganseznec/hop/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/morganseznec/hop/compare/v0.1.7...v0.2.0
 [0.1.7]: https://github.com/morganseznec/hop/compare/v0.1.6...v0.1.7
