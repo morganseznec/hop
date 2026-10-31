@@ -20,6 +20,12 @@
   <a href="https://ko-fi.com/B0F429R66U"><img alt="Support on Ko-fi" src="https://img.shields.io/badge/Ko--fi-support-FF5E5B?logo=ko-fi&amp;logoColor=white"></a>
 </p>
 
+<p align="center">
+  <img alt="hop ls lists 26 instances from 9 AWS profiles in 6 regions; hop shop app finds two matches and asks which one; hop 10.90.2.73 opens a shell on an instance of another account" src="docs/demo.gif">
+  <br>
+  <sub>A fictional fleet, recorded with <code>vhs docs/demo/demo.tape</code>.</sub>
+</p>
+
 hop finds your instances across every AWS profile on your machine, lets you pick one
 by name, and opens an AWS Systems Manager Session Manager shell. No SSH keys, no
 bastion, no instance IDs to copy. macOS, Linux and Windows; amd64 and arm64.
