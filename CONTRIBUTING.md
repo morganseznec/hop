@@ -24,6 +24,10 @@ the logic around them with plain data.
 When you try your change against real accounts, use accounts you own or are allowed
 to use, and prefer `hop ls` and `hop doctor`, which are read-only.
 
+The demo in the README and on the site plays a fictional fleet (`docs/demo`). After a
+change that shows in it, record it again with [VHS](https://github.com/charmbracelet/vhs):
+`vhs docs/demo/demo.tape` rewrites `docs/demo.gif` and `site/demo.mp4`.
+
 ## Tests
 
 Every change of behaviour comes with tests, in the same pull request: a new feature

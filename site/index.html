@@ -124,7 +124,9 @@ h1 { font-size: clamp(40px, 7.4vw, 84px); line-height: 1.0; letter-spacing: -0.0
 .hint a { color: var(--mint); }
 
 /* terminal */
-.stage { margin: 56px auto 0; max-width: 920px; position: relative; }
+.stage { margin: 56px auto 0; max-width: 1040px; position: relative; }
+.stage .note { margin: 14px 0 0; font: 12.5px var(--mono); color: var(--faint); }
+.stage .note a { color: inherit; }
 .stage::before { content: ""; position: absolute; inset: 30% 8% -12% 8%; z-index: -1; background: radial-gradient(closest-side, var(--mint-glow), transparent); filter: blur(30px); }
 .term { text-align: left; border-radius: 16px; overflow: hidden; background: linear-gradient(180deg, rgba(20, 28, 46, 0.97), rgba(7, 11, 20, 0.99)); border: 1px solid rgba(255, 255, 255, 0.09); box-shadow: var(--shadow); }
 .term .bar { display: flex; align-items: center; gap: 8px; padding: 13px 16px; border-bottom: 1px solid rgba(255, 255, 255, 0.06); }
@@ -132,9 +134,8 @@ h1 { font-size: clamp(40px, 7.4vw, 84px); line-height: 1.0; letter-spacing: -0.0
 .term .bar i:nth-child(1) { background: #ff5f57; } .term .bar i:nth-child(2) { background: #febc2e; } .term .bar i:nth-child(3) { background: #28c840; }
 .term .bar span { margin-left: 10px; font: 12.5px var(--mono); color: #7f8fa3; }
 .term pre { margin: 0; padding: 20px 22px 24px; min-height: 236px; font: 13.5px/1.7 var(--mono); color: #d8e4ec; overflow-x: auto; white-space: pre; }
+.term video { display: block; width: 100%; height: auto; background: #0e1524; }
 .t-p { color: #5ae6be; } .t-d { color: #7f8fa3; } .t-ok { color: #5ae6be; } .t-w { color: #f5c46b; } .t-b { color: #e9f0f5; font-weight: 600; }
-.caret { display: inline-block; width: 8px; height: 1.15em; vertical-align: -0.2em; background: #5ae6be; animation: blink 1.05s steps(1) infinite; }
-@keyframes blink { 50% { opacity: 0; } }
 
 /* sections */
 section { padding: clamp(64px, 9vw, 112px) 0; }
@@ -287,16 +288,11 @@ footer a:hover { color: var(--text); }
       </div>
 
       <div class="stage">
-        <div class="term" role="img" aria-label="Example: hop finds acme-p-shop-app among every profile and opens a logged Session Manager shell">
-          <div class="bar"><i></i><i></i><i></i><span>~ zsh</span></div>
-<pre id="demo"><span class="t-p">$</span> hop shop app
-<span class="t-d">hop: 15 profiles, each in its own region: 1 match</span>
-<span class="t-b">hop: session LOGGED</span> on acme-p-shop-app (i-0abc1234def567890, acme-prod, eu-west-1)
-     to /acme/ssm/sessions. Everything that follows is recorded.
-
-Starting session with SessionId: alice-0a1b2c3d4e5f67890
-sh-5.2$ <span class="caret"></span></pre>
+        <div class="term">
+          <div class="bar"><i></i><i></i><i></i><span>~ bash</span></div>
+          <video id="demo" src="demo.mp4" width="1240" height="680" autoplay muted loop playsinline preload="auto" aria-label="hop ls lists 26 instances from 9 AWS profiles in 6 regions; hop shop app finds two matches and asks which one; hop 10.90.2.73 opens a shell on an instance of another account"></video>
         </div>
+        <p class="note">A fictional fleet. Recorded with VHS: <a href="https://github.com/morganseznec/hop/tree/main/docs/demo">docs/demo</a></p>
       </div>
     </div>
   </section>
@@ -594,29 +590,15 @@ sudo pacman -U hop-&lt;version&gt;-1-x86_64.pkg.tar.zst</pre><button class="copy
     items.forEach((e) => io.observe(e));
   }
 
-  // Terminal: type the command, then show the output line by line, and loop.
+  // The demo: with reduced motion, stopped on the hop ls frame, with controls to play it.
   const demo = document.getElementById("demo");
-  if (!reduce && demo && "IntersectionObserver" in window) {
-    const lines = demo.innerHTML.split("\n");
-    const prompt = '<span class="t-p">$</span> ';
-    const cmd = "hop shop app";
-    const play = () => {
-      let i = 0;
-      const type = () => {
-        demo.innerHTML = prompt + cmd.slice(0, i) + '<span class="caret"></span>';
-        if (i++ < cmd.length) return setTimeout(type, 60 + Math.random() * 70);
-        let n = 1;
-        const show = () => {
-          demo.innerHTML = lines.slice(0, n + 1).join("\n");
-          if (n++ < lines.length - 1) setTimeout(show, n === 2 ? 500 : 260);
-          else setTimeout(play, 6500);
-        };
-        setTimeout(show, 380);
-      };
-      type();
-    };
-    const io2 = new IntersectionObserver((es) => { if (es[0].isIntersecting) { io2.disconnect(); setTimeout(play, 400); } });
-    io2.observe(demo);
+  if (reduce && demo) {
+    demo.removeAttribute("autoplay");
+    demo.pause();
+    demo.controls = true;
+    const still = () => { demo.currentTime = 4.5; };
+    if (demo.readyState >= 1) still();
+    else demo.addEventListener("loadedmetadata", still, { once: true });
   }
 })();
 </script>
