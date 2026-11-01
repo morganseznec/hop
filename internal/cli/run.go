@@ -28,8 +28,9 @@ it. The remote exit code becomes hop's exit code. Options placed after the insta
 name belong to the command: "hop run tools ls -la". Linux and macOS instances only.
 
 Session logging does not apply: the command and its output stay in the SSM command
-history of the account and in CloudTrail. A command that has not reached the
-instance when hop stops waiting is canceled; one already running goes on.`,
+history of the account, for about 30 days. CloudTrail records who sent the command
+and where, without its text. A command that has not reached the instance when hop
+stops waiting is canceled; one already running goes on.`,
 		Example: `  hop run tools uptime
   hop run tools df -h /                       options after the instance go to the command
   hop run tools 'journalctl -u app | tail'    quote pipes and redirections
@@ -87,9 +88,10 @@ func newPush(f *filters) *cobra.Command {
 
 The file goes through SSM Run Command (AWS-RunShellScript) and is written as root to
 an absolute path on the instance. An existing file keeps its owner and mode; a new
-one belongs to root. The content stays in the SSM command history of the account and
-in CloudTrail, base64-encoded: do not push secrets this way. Linux and macOS
-instances only; for larger files, go through S3.`,
+one belongs to root. The content stays in the SSM command history of the account for
+about 30 days, base64-encoded: do not push secrets this way. CloudTrail records the
+call without the content. Linux and macOS instances only; for larger files, go
+through S3.`,
 		Example: `  hop push ./app.conf tools /etc/app/app.conf
   hop push -p acme-prod ./motd web /etc/motd`,
 		Args: cobra.ExactArgs(3),
