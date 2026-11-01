@@ -330,8 +330,11 @@ through a session:
 - they run as root, on Linux and macOS instances only;
 - the session logging settings (and `transcript: require`) do not apply to them;
 - the command, its parameters and its output stay in the SSM command history of the
-  account (about 30 days) and in CloudTrail. For `push`, that includes the file
-  content, base64-encoded. Do not push secrets this way.
+  account (about 30 days). For `push`, that includes the file content,
+  base64-encoded. Do not push secrets this way;
+- CloudTrail records who sent each command, to which instance and with which
+  document, but not the command itself: it shows the parameters as
+  `HIDDEN_DUE_TO_SECURITY_REASONS`.
 
 `hop run` prints the output once the command ends (24,000 characters per stream at
 most, where SSM cuts it) and waits 2 minutes by default (`--timeout`). A command the instance has

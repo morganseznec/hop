@@ -6,6 +6,12 @@ All notable changes to hop are listed here. The format follows
 
 ## [Unreleased]
 
+### Fixed
+
+- The README and the help of `hop run` and `hop push` said that CloudTrail keeps the
+  command and the pushed file. CloudTrail records the call but hides its parameters:
+  the command and the file content stay in the SSM command history of the account.
+
 ## [0.3.1] - 2026-10-31
 
 Fixes from an audit of the experimental GCP support.
