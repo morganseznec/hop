@@ -6,6 +6,10 @@ All notable changes to hop are listed here. The format follows
 
 ## [Unreleased]
 
+## [0.3.2] - 2026-11-04
+
+Fixes to `hop push` and to what the help says about CloudTrail.
+
 ### Fixed
 
 - The README and the help of `hop run` and `hop push` said that CloudTrail keeps the
@@ -257,7 +261,8 @@ First release.
   and Arch Linux packages, and a hardened Alpine image on GHCR. The Homebrew cask
   came with v0.1.1.
 
-[Unreleased]: https://github.com/morganseznec/hop/compare/v0.3.1...HEAD
+[Unreleased]: https://github.com/morganseznec/hop/compare/v0.3.2...HEAD
+[0.3.2]: https://github.com/morganseznec/hop/compare/v0.3.1...v0.3.2
 [0.3.1]: https://github.com/morganseznec/hop/compare/v0.3.0...v0.3.1
 [0.3.0]: https://github.com/morganseznec/hop/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/morganseznec/hop/compare/v0.1.7...v0.2.0
