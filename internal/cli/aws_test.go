@@ -511,7 +511,7 @@ func TestPushChecksBeforeResolving(t *testing.T) {
 	fake := fakeAWSEnv(t)
 	dir := t.TempDir()
 	big := filepath.Join(dir, "big.bin")
-	os.WriteFile(big, make([]byte, 400_001), 0o600)
+	os.WriteFile(big, make([]byte, 64_001), 0o600)
 	small := filepath.Join(dir, "app.conf")
 	os.WriteFile(small, []byte("listen 8080\n"), 0o600)
 	cases := []struct {
@@ -520,7 +520,7 @@ func TestPushChecksBeforeResolving(t *testing.T) {
 	}{
 		// "nowhere" matches no instance: resolving it would fail differently, after a
 		// refresh.
-		{[]string{"push", big, "nowhere", "/opt/acme/big.bin"}, big + ": 400001 bytes, too large for this method (limit 400000)"},
+		{[]string{"push", big, "nowhere", "/opt/acme/big.bin"}, big + ": 64001 bytes, too large for this method (limit 64000)"},
 		{[]string{"push", small, "nowhere", "opt/acme/app.conf"}, "remote path must be absolute"},
 	}
 	for _, c := range cases {
@@ -534,7 +534,7 @@ func TestPushChecksBeforeResolving(t *testing.T) {
 	if len(fake.calls) != 0 {
 		t.Errorf("AWS called before the checks: %q", fake.calls)
 	}
-	if short := newPush(&filters{}).Short; !strings.Contains(short, "400 KB") {
+	if short := newPush(&filters{}).Short; !strings.Contains(short, "64 KB") {
 		t.Errorf("help %q", short)
 	}
 }

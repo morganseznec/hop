@@ -11,6 +11,11 @@ All notable changes to hop are listed here. The format follows
 - The README and the help of `hop run` and `hop push` said that CloudTrail keeps the
   command and the pushed file. CloudTrail records the call but hides its parameters:
   the command and the file content stay in the SSM command history of the account.
+- `hop push` announced files of up to 400 KB, but SSM Run Command refuses a command
+  over 97 KB with its document, and the file goes in base64: past about 72 KB,
+  SendCommand failed and nothing was written on the instance. The limit is now
+  64 KB, checked before anything is sent, and a command that is too large for SSM
+  gets a clear error.
 
 ## [0.3.1] - 2026-10-31
 

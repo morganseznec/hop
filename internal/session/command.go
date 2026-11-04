@@ -290,14 +290,19 @@ func explainSend(err error, id string) error {
 			return fmt.Errorf("IAM denied sending a command to %s: %s", id, api.ErrorMessage())
 		case "InvalidDocument":
 			return fmt.Errorf("AWS-RunShellScript is not available in this region: %s", api.ErrorMessage())
+		case "MaxDocumentSizeExceeded":
+			return fmt.Errorf("the command is too large for SSM Run Command, which takes 97 KB with its document: nothing was sent to %s", id)
 		}
 	}
 	return err
 }
 
-// PushLimit is the largest file Push accepts, in bytes: beyond it, the SendCommand
-// parameters get too large.
-const PushLimit = 400_000
+// PushLimit is the largest file Push accepts, in bytes. SendCommand takes 97 KB at most,
+// the document and its parameters together, and refuses more with
+// MaxDocumentSizeExceeded before anything reaches the instance. In base64, 64,000 bytes
+// become 85,336 characters, which leaves room for the rest of the script, a remote path
+// of up to 4,096 characters and the AWS-RunShellScript document.
+const PushLimit = 64_000
 
 // CheckPush refuses what Push would refuse, without reading the file or calling AWS:
 // a remote path that is not absolute, or a local file larger than PushLimit.

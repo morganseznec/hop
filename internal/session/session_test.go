@@ -1,6 +1,7 @@
 package session
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -514,6 +515,15 @@ func TestRunErrors(t *testing.T) {
 			t.Error("polled after a failed SendCommand")
 		}
 	})
+	t.Run("command too large", func(t *testing.T) {
+		_, cfg := newFake(t, func(op string, req map[string]any) (int, string) {
+			return 400, `{"__type":"MaxDocumentSizeExceeded","message":"Size of the parameters exceeds the limit"}`
+		})
+		_, err := Run(context.Background(), cfg, "i-0aaa", []string{"true"}, time.Minute)
+		if err == nil || !strings.Contains(err.Error(), "too large") || !strings.Contains(err.Error(), "i-0aaa") {
+			t.Errorf("error %v", err)
+		}
+	})
 	t.Run("instance not managed", func(t *testing.T) {
 		_, cfg := newFake(t, func(op string, req map[string]any) (int, string) {
 			return 400, `{"__type":"InvalidInstanceId","message":"Instances [[i-0aaa]] not in a valid state"}`
@@ -772,9 +782,30 @@ func posixTools(t *testing.T) {
 	}
 }
 
+// sendCommandMax is what SendCommand accepts, the document and its parameters
+// together: 97 KB, counted here as 97,000 bytes. runShellScriptSize is a generous
+// size for the AWS-RunShellScript document itself, about 1.2 KB.
+const (
+	sendCommandMax     = 97_000
+	runShellScriptSize = 3_000
+)
+
+// paramsSize is the size of the Parameters of a SendCommand request, as JSON.
+func paramsSize(t *testing.T, params any) int {
+	t.Helper()
+	var b bytes.Buffer
+	enc := json.NewEncoder(&b)
+	enc.SetEscapeHTML(false)
+	if err := enc.Encode(params); err != nil {
+		t.Fatal(err)
+	}
+	return b.Len()
+}
+
 // remoteShell plays the instance: it runs the commands received by SendCommand with
 // the local sh, as AWS-RunShellScript would, with TMPDIR pointing to a temporary folder
-// so that the files Push leaves behind can be checked.
+// so that the files Push leaves behind can be checked. Like SSM, it refuses a command
+// too large for SendCommand.
 func remoteShell(t *testing.T) (*fakeSSM, aws.Config, string) {
 	t.Helper()
 	posixTools(t)
@@ -784,6 +815,9 @@ func remoteShell(t *testing.T) (*fakeSSM, aws.Config, string) {
 	fake, cfg := newFake(t, func(op string, req map[string]any) (int, string) {
 		switch op {
 		case "SendCommand":
+			if paramsSize(t, req["Parameters"])+runShellScriptSize > sendCommandMax {
+				return 400, `{"__type":"MaxDocumentSizeExceeded","message":"Size of the parameters exceeds the limit"}`
+			}
 			script := append([]string{"export TMPDIR=" + ShellQuote(remoteTmp)}, commandsOf(req)...)
 			stdout, stderr, code := runScript(script)
 			status := "Success"
@@ -865,6 +899,19 @@ func TestPushEndToEnd(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// A file of PushLimit bytes, sent to the longest path Linux accepts, still fits in one
+// SendCommand, and a file twice as large does not, so the check measures something.
+func TestPushFitsOneSendCommand(t *testing.T) {
+	dst := "/" + strings.Repeat("d", 4095)
+	size := paramsSize(t, map[string][]string{"commands": pushScript(make([]byte, PushLimit), dst)})
+	if size+runShellScriptSize > sendCommandMax {
+		t.Errorf("push of %d bytes: parameters of %d bytes, over %d with the document", PushLimit, size, sendCommandMax)
+	}
+	if double := paramsSize(t, map[string][]string{"commands": pushScript(make([]byte, 2*PushLimit), "/x")}); double+runShellScriptSize <= sendCommandMax {
+		t.Errorf("push of %d bytes fits (%d bytes): the test no longer measures anything", 2*PushLimit, double)
 	}
 }
 
