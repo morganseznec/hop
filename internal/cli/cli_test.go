@@ -67,7 +67,7 @@ func TestHelpTexts(t *testing.T) {
 	isolate(t)
 	root := newRoot()
 	cmds := append([]*cobra.Command{root}, root.Commands()...)
-	withExamples := map[string]bool{"push": true, "run": true, "login": true, "scan": true, "doctor": true}
+	withExamples := map[string]bool{"push": true, "pull": true, "run": true, "login": true, "scan": true, "doctor": true}
 	for _, c := range cmds {
 		// Cobra's own commands (help, completion) keep its wording.
 		if c.Hidden || c.Name() == "help" || c.Name() == "completion" {

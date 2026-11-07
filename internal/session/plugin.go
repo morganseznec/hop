@@ -51,9 +51,41 @@ func PluginPath() (string, error) {
 //   - Ctrl-C, Ctrl-\ and Ctrl-Z are ignored here and left to the plugin, which forwards
 //     them to the remote shell instead of ending the session.
 func Start(ctx context.Context, cfg aws.Config, req Request) error {
-	plugin, err := PluginPath()
+	s, err := open(ctx, cfg, req)
 	if err != nil {
 		return err
+	}
+	cmd := s.cmd
+	cmd.Stdin, cmd.Stdout, cmd.Stderr = os.Stdin, os.Stdout, os.Stderr
+
+	// Ctrl-C and friends belong to the remote shell: the plugin forwards them.
+	restore := ignoreSignals()
+	defer restore()
+	if err := cmd.Start(); err != nil {
+		// Without the plugin, the session opened on the agent side would stay active
+		// until it expires: terminate it.
+		s.terminate(ctx)
+		return err
+	}
+	return cmd.Wait()
+}
+
+// opened is a session started on the SSM side, with the plugin command that carries
+// it, not started yet.
+type opened struct {
+	cmd       *exec.Cmd
+	client    *ssm.Client
+	sessionID string
+}
+
+// terminate closes the session, best effort.
+func (s *opened) terminate(ctx context.Context) { terminate(ctx, s.client, s.sessionID) }
+
+// open starts the session and prepares the plugin, as `aws ssm start-session` does.
+func open(ctx context.Context, cfg aws.Config, req Request) (*opened, error) {
+	plugin, err := PluginPath()
+	if err != nil {
+		return nil, err
 	}
 	in := &ssm.StartSessionInput{Target: aws.String(req.InstanceID)}
 	params := map[string]any{"Target": req.InstanceID}
@@ -66,7 +98,7 @@ func Start(ctx context.Context, cfg aws.Config, req Request) error {
 	client := ssm.NewFromConfig(cfg)
 	out, err := client.StartSession(ctx, in)
 	if err != nil {
-		return explainStart(err, req.InstanceID)
+		return nil, explainStart(err, req.InstanceID)
 	}
 
 	resp, _ := json.Marshal(map[string]string{
@@ -83,18 +115,7 @@ func Start(ctx context.Context, cfg aws.Config, req Request) error {
 		// The null device reads as an empty file: no keys, so SSO applies.
 		cmd.Env = append(cmd.Env, "AWS_SHARED_CREDENTIALS_FILE="+os.DevNull)
 	}
-	cmd.Stdin, cmd.Stdout, cmd.Stderr = os.Stdin, os.Stdout, os.Stderr
-
-	// Ctrl-C and friends belong to the remote shell: the plugin forwards them.
-	restore := ignoreSignals()
-	defer restore()
-	if err := cmd.Start(); err != nil {
-		// Without the plugin, the session opened on the agent side would stay active
-		// until it expires: terminate it.
-		terminate(ctx, client, aws.ToString(out.SessionId))
-		return err
-	}
-	return cmd.Wait()
+	return &opened{cmd: cmd, client: client, sessionID: aws.ToString(out.SessionId)}, nil
 }
 
 // terminate closes a session, best effort, with a context of its own (the caller's may

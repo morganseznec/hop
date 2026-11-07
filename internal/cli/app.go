@@ -649,11 +649,16 @@ const (
 	forTunnel
 	forRun
 	forPush
+	forPull
 )
 
 // sendsCommand reports whether the purpose changes the machine with nobody watching
 // the result (run and push, through AWS-RunShellScript).
 func (p purpose) sendsCommand() bool { return p == forRun || p == forPush }
+
+// posixShell reports whether the purpose runs a POSIX shell script on the instance
+// (run, push and pull), which Windows does not run.
+func (p purpose) posixShell() bool { return p.sendsCommand() || p == forPull }
 
 // confirmDefault is the answer Enter gives when hop asks about a loose match. For run
 // and push, a doubt is a no.
@@ -667,6 +672,8 @@ func (p purpose) question() string {
 		return "Run the command there?"
 	case forPush:
 		return "Copy the file there?"
+	case forPull:
+		return "Download the file from there?"
 	}
 	return "Connect?"
 }
@@ -857,7 +864,7 @@ func (a *app) reach(ctx context.Context, args []string, why purpose) (inventory.
 			return in, aws.Config{}, err
 		}
 		// A Windows instance is refused before signing in or looking it up.
-		if why.sendsCommand() {
+		if why.posixShell() {
 			if err := posixOnly(in); err != nil {
 				return in, aws.Config{}, err
 			}

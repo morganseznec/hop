@@ -61,7 +61,7 @@ func TestCommandTree(t *testing.T) {
 			t.Error("__refresh must stay hidden")
 		}
 	}
-	for _, want := range []string{"ls", "run", "tunnel", "push", "login", "doctor", "scan", "init", "__refresh"} {
+	for _, want := range []string{"ls", "run", "tunnel", "push", "pull", "login", "doctor", "scan", "init", "__refresh"} {
 		if !slices.Contains(names, want) {
 			t.Errorf("command %s missing (have %v)", want, names)
 		}
@@ -365,7 +365,7 @@ func TestCompleteRegions(t *testing.T) {
 	}
 }
 
-func TestRunAndPushRefuseWindows(t *testing.T) {
+func TestRunPushAndPullRefuseWindows(t *testing.T) {
 	fleetEnv(t)
 	terminal(t, false, false)
 	inv := inventory.Load()
@@ -378,9 +378,9 @@ func TestRunAndPushRefuseWindows(t *testing.T) {
 	local := filepath.Join(t.TempDir(), "app.conf")
 	os.WriteFile(local, []byte("x"), 0o600)
 	// Refused before any AWS call: the endpoint is closed here.
-	for _, args := range [][]string{{"run", "acme-b-win", "dir"}, {"push", local, "acme-b-win", "/c/app.conf"}} {
+	for _, args := range [][]string{{"run", "acme-b-win", "dir"}, {"push", local, "acme-b-win", "/c/app.conf"}, {"pull", "acme-b-win", "/c/app.conf", t.TempDir()}} {
 		_, _, err := runHop(t, args...)
-		want := "acme-b-win runs Windows: hop run and hop push support Linux and macOS instances; use a shell session (hop acme-b-win)"
+		want := "acme-b-win runs Windows: hop run, push and pull support Linux and macOS instances; use a shell session (hop acme-b-win)"
 		if err == nil || err.Error() != want {
 			t.Errorf("%s: %v", args[0], err)
 		}

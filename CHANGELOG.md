@@ -6,6 +6,14 @@ All notable changes to hop are listed here. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- `hop pull <instance> <remote-path> [local-path]` downloads a file through a Session
+  Manager session that runs a single command (`AWS-StartNonInteractiveCommand`): no
+  SSH key and no size limit. The file is read as the session user, or with `sudo -n`,
+  and renamed into place once the SHA-256 matches on both sides. The IAM policy in the
+  README adds that document to `ssm:StartSession`.
+
 ## [0.3.2] - 2026-11-04
 
 Fixes to `hop push` and to what the help says about CloudTrail.

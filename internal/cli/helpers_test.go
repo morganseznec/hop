@@ -10,12 +10,15 @@ import (
 
 	"github.com/morganseznec/hop/internal/awsconf"
 	"github.com/morganseznec/hop/internal/config"
+	"github.com/morganseznec/hop/internal/fakeagent"
 	"github.com/morganseznec/hop/internal/inventory"
 	"github.com/morganseznec/hop/internal/session"
 	"github.com/morganseznec/hop/internal/state"
 )
 
 func TestMain(m *testing.M) {
+	// The fake session-manager-plugin of the pull tests is this binary.
+	fakeagent.Main()
 	// Completion may start this binary again with "__refresh" to refresh the cache in
 	// the background: in a test binary, that must never run the suite again.
 	for _, a := range os.Args[1:] {
