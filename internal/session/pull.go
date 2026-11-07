@@ -108,22 +108,27 @@ func Pull(ctx context.Context, cfg aws.Config, req Request, remote, local string
 	go func() {
 		select {
 		case <-ctx.Done():
-			s.cmd.Process.Kill()
+			_ = s.cmd.Process.Kill()
 		case <-stopped:
 		}
 	}()
 	h := sha256.New()
 	n, sum, recvErr := receive(stdout, "--hop"+nonce+"-", io.MultiWriter(tmp, h), progress)
 	if recvErr != nil {
-		s.cmd.Process.Kill()
+		_ = s.cmd.Process.Kill()
 	}
-	exited := make(chan error, 1)
-	go func() { exited <- s.cmd.Wait() }()
+	// The plugin's exit code says nothing more than receive: it exits 0 when the agent
+	// closes the session, and is killed otherwise.
+	exited := make(chan struct{})
+	go func() {
+		_ = s.cmd.Wait()
+		close(exited)
+	}()
 	select {
 	case <-exited:
 	case <-time.After(pluginExitWait):
 		// The file is complete; the session may not be closed yet.
-		s.cmd.Process.Kill()
+		_ = s.cmd.Process.Kill()
 		<-exited
 		s.terminate(ctx)
 	}
@@ -256,7 +261,7 @@ func receive(r io.Reader, marker string, w io.Writer, progress Progress) (int64,
 		case run.ended:
 			return cw.n, "", endedEarly(cw.n)
 		}
-		return cw.n, "", fmt.Errorf("transfer corrupted after %d bytes: %v", cw.n, err)
+		return cw.n, "", fmt.Errorf("transfer corrupted after %d bytes: %w", cw.n, err)
 	}
 	var stderr string
 	for {
@@ -313,7 +318,8 @@ func (b *base64Run) Read(p []byte) (int, error) {
 			p[n] = c
 			n++
 		default:
-			b.r.UnreadByte()
+			// The byte was just read: unreading it cannot fail.
+			_ = b.r.UnreadByte()
 			if n > 0 {
 				return n, nil
 			}

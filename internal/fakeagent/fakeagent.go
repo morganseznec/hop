@@ -58,7 +58,7 @@ func Main() {
 
 func run(args []string) int {
 	if out := os.Getenv("HOP_TEST_OUT"); out != "" {
-		os.WriteFile(filepath.Join(out, "args"), []byte(strings.Join(args, "\n")+"\n"), 0o600)
+		_ = os.WriteFile(filepath.Join(out, "args"), []byte(strings.Join(args, "\n")+"\n"), 0o600)
 	}
 	// The arguments hop gives: the variable that holds the StartSession response, the
 	// region, "StartSession", the profile, the request, the endpoint.
@@ -78,7 +78,7 @@ func run(args []string) int {
 
 	// The real plugin ends the session when its stdin closes.
 	go func() {
-		io.Copy(io.Discard, os.Stdin)
+		_, _ = io.Copy(io.Discard, os.Stdin)
 		fmt.Fprintln(os.Stderr, "Unable read from Stdin: EOF")
 		os.Exit(1)
 	}()
@@ -148,6 +148,6 @@ func (o *output) Write(p []byte) (int, error) {
 		}
 	}
 	o.n += len(q)
-	o.w.Write(q)
+	_, _ = o.w.Write(q)
 	return len(p), nil
 }
