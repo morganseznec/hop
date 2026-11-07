@@ -6,6 +6,18 @@ All notable changes to hop are listed here. The format follows
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-11-07
+
+Adds `hop pull`, which downloads a file through Session Manager.
+
+### Added
+
+- `hop pull <instance> <remote-path> [local-path]` downloads a file through a Session
+  Manager session that runs a single command (`AWS-StartNonInteractiveCommand`): no
+  SSH key and no size limit. The file is read as the session user, or with `sudo -n`,
+  and renamed into place once the SHA-256 matches on both sides. The IAM policy in the
+  README adds that document to `ssm:StartSession`.
+
 ## [0.3.2] - 2026-11-04
 
 Fixes to `hop push` and to what the help says about CloudTrail.
@@ -261,7 +273,8 @@ First release.
   and Arch Linux packages, and a hardened Alpine image on GHCR. The Homebrew cask
   came with v0.1.1.
 
-[Unreleased]: https://github.com/morganseznec/hop/compare/v0.3.2...HEAD
+[Unreleased]: https://github.com/morganseznec/hop/compare/v0.4.0...HEAD
+[0.4.0]: https://github.com/morganseznec/hop/compare/v0.3.2...v0.4.0
 [0.3.2]: https://github.com/morganseznec/hop/compare/v0.3.1...v0.3.2
 [0.3.1]: https://github.com/morganseznec/hop/compare/v0.3.0...v0.3.1
 [0.3.0]: https://github.com/morganseznec/hop/compare/v0.2.0...v0.3.0

@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"net"
 	"os"
+	"path"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -138,6 +140,149 @@ through S3.`,
 	}
 }
 
+const pullShort = "Download a file and verify its SHA-256 (replaces scp from the instance)"
+
+func newPull(f *filters) *cobra.Command {
+	return &cobra.Command{
+		Use:   "pull <instance> <remote-path> [local-path]",
+		Short: pullShort,
+		Long: pullShort + `.
+
+The file goes through a Session Manager session that runs a single command
+(AWS-StartNonInteractiveCommand): no SSH key, and no size limit. It is read as the
+session user (ssm-user by default), or with sudo -n when that user cannot read it.
+Without a local path, it lands in the current directory under its own name; given a
+directory, it lands there under its own name.
+
+hop writes it under a temporary name, then renames it once the SHA-256 matches on
+both sides: an interrupted download leaves nothing behind. A new file is readable by
+you only; an existing one is replaced and keeps its mode.
+
+While it streams, the SSM agent keeps the output on the instance's disk, in base64:
+a third more than the file. CloudTrail records the StartSession call, and when the
+account logs sessions, the log may keep a copy of the file, base64-encoded. Linux
+and macOS instances only.`,
+		Example: `  hop pull tools /var/log/app.log                 to ./app.log
+  hop pull tools /etc/nginx/nginx.conf conf/      to conf/nginx.conf
+  hop pull -p acme-prod db /var/backups/db.sql.gz /tmp/prod.sql.gz`,
+		Args: cobra.RangeArgs(2, 3),
+		ValidArgsFunction: func(cmd *cobra.Command, args []string, toComplete string) ([]string, cobra.ShellCompDirective) {
+			switch len(args) {
+			case 0:
+				return completeNth(f, 0)(cmd, args, toComplete)
+			case 1:
+				return nil, cobra.ShellCompDirectiveNoFileComp
+			}
+			return nil, cobra.ShellCompDirectiveDefault
+		},
+		RunE: func(cmd *cobra.Command, args []string) error {
+			remote, local := args[1], ""
+			if len(args) == 3 {
+				local = args[2]
+			}
+			// Before the picker, a question or a sign-in, which would all be for nothing.
+			if err := session.CheckPull(remote); err != nil {
+				return err
+			}
+			local, err := pullTarget(remote, local)
+			if err != nil {
+				return err
+			}
+			a, err := newApp(*f)
+			if err != nil {
+				return err
+			}
+			in, cfg, err := a.reach(cmd.Context(), args[:1], forPull)
+			if err != nil {
+				return err
+			}
+			a.warnAgent(in)
+			a.touch(in)
+			info("%s:%s -> %s", in.Name, remote, local)
+			req := session.Request{Profile: in.Profile, Region: in.Region, InstanceID: in.ID, PreferSSO: a.preferSSO(in.Profile)}
+			p := &progress{tty: stderrTTY}
+			n, err := session.Pull(cmd.Context(), cfg, req, remote, local, p.update)
+			p.clear()
+			if err != nil {
+				return err
+			}
+			info("%s received, SHA-256 matches on both sides", byteSize(n))
+			return nil
+		},
+	}
+}
+
+// pullTarget is the file pull writes: local as given, or the remote file's name in the
+// directory local, or in the current directory when local is empty. It must be a
+// regular file, or not exist yet in a directory that does.
+func pullTarget(remote, local string) (string, error) {
+	// The remote path is a POSIX one, whatever this machine runs.
+	name := path.Base(remote)
+	target := local
+	if st, err := os.Stat(local); local == "" || (err == nil && st.IsDir()) {
+		target = filepath.Join(local, name)
+	} else if strings.HasSuffix(local, "/") || strings.HasSuffix(local, string(filepath.Separator)) {
+		return "", fmt.Errorf("directory not found: %s", local)
+	}
+	st, err := os.Stat(target)
+	switch {
+	case err == nil && st.IsDir():
+		return "", fmt.Errorf("%s is a directory", target)
+	case err == nil && !st.Mode().IsRegular():
+		return "", fmt.Errorf("%s is not a regular file", target)
+	case err == nil:
+		return target, nil
+	case !errors.Is(err, os.ErrNotExist):
+		return "", err
+	}
+	if dir := filepath.Dir(target); dir != "." {
+		if st, err := os.Stat(dir); err != nil || !st.IsDir() {
+			return "", fmt.Errorf("directory not found: %s", dir)
+		}
+	}
+	return target, nil
+}
+
+// progress shows on stderr, when it is a terminal, how much of a download has arrived,
+// at most every 200 ms.
+type progress struct {
+	tty   bool
+	last  time.Time
+	shown bool
+}
+
+func (p *progress) update(done, total int64) {
+	if !p.tty || time.Since(p.last) < 200*time.Millisecond {
+		return
+	}
+	p.last, p.shown = time.Now(), true
+	msg := byteSize(done)
+	if total > 0 {
+		msg += fmt.Sprintf(" of %s (%d%%)", byteSize(total), done*100/total)
+	}
+	fmt.Fprintf(os.Stderr, "\rhop: %s\033[K", msg)
+}
+
+// clear erases the progress line, if one was shown.
+func (p *progress) clear() {
+	if p.shown {
+		fmt.Fprint(os.Stderr, "\r\033[K")
+	}
+}
+
+// byteSize writes n in B, KB, MB or GB, in powers of 1,000.
+func byteSize(n int64) string {
+	switch {
+	case n < 1000:
+		return fmt.Sprintf("%d B", n)
+	case n < 1_000_000:
+		return fmt.Sprintf("%.1f KB", float64(n)/1e3)
+	case n < 1_000_000_000:
+		return fmt.Sprintf("%.1f MB", float64(n)/1e6)
+	}
+	return fmt.Sprintf("%.1f GB", float64(n)/1e9)
+}
+
 func newTunnel(f *filters) *cobra.Command {
 	var host string
 	cmd := &cobra.Command{
@@ -198,13 +343,13 @@ lower ports usually need administrator rights.`,
 	return cmd
 }
 
-// posixOnly refuses Windows instances: run and push send a POSIX shell script through
-// AWS-RunShellScript, which Windows does not run.
+// posixOnly refuses Windows instances: run, push and pull send a POSIX shell script,
+// which Windows does not run.
 func posixOnly(in inventory.Instance) error {
 	// EC2 says "Windows" or "Windows with SQL Server ..."; the SSM agent says
 	// "Microsoft Windows Server 2022 Datacenter".
 	if strings.Contains(strings.ToLower(in.Platform), "windows") {
-		return fmt.Errorf("%s runs %s: hop run and hop push support Linux and macOS instances; use a shell session (hop %s)", in.Name, in.Platform, in.Name)
+		return fmt.Errorf("%s runs %s: hop run, push and pull support Linux and macOS instances; use a shell session (hop %s)", in.Name, in.Platform, in.Name)
 	}
 	return nil
 }

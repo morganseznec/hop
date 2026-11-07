@@ -91,6 +91,7 @@ Fields marked "optional" are left out when empty.
 | `hop run --timeout` | 2 minutes by default. Above one hour, it also raises the command's execution timeout, up to 48 hours (`AWS-RunShellScript` stops a command after one hour by default). |
 | A command not delivered | Canceled when hop stops waiting (timeout, Ctrl-C), so it never runs later. A command already running goes on. |
 | `hop push` | 64 KB (64,000 bytes), to an absolute path, written as root: SSM Run Command takes 97 KB per command with its document, and base64 adds a third. hop waits up to 2 minutes, then compares the SHA-256 on both sides. |
+| `hop pull` | No size limit, from an absolute path, read as the session user or with `sudo -n`. The file is written under a temporary name next to its destination, then renamed once the SHA-256 matches on both sides. The SSM agent keeps the output on the instance's disk while it streams, in base64. |
 | Inventory cache | 15 minutes (`cache_ttl`). A profile and region whose query failed is retried after one minute. |
 | Freshness before acting | An instance whose data is more than one minute old is looked up again before hop acts on it. |
 | Inventory queries | 16 profile/region pairs at a time, 25 seconds each at most. |

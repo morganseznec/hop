@@ -89,6 +89,8 @@ func gcpAlternative(why purpose, in inventory.Instance) string {
 			in.Name, in.Project(), in.Region)
 	case forPush:
 		return fmt.Sprintf("gcloud compute scp <file> %s:<path> %s", in.Name, args)
+	case forPull:
+		return fmt.Sprintf("gcloud compute scp %s:<path> . %s", in.Name, args)
 	}
 	return fmt.Sprintf("gcloud compute ssh %s %s --command '<command>'", in.Name, args)
 }

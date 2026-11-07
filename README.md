@@ -89,7 +89,8 @@ A partial or fuzzy match asks before connecting. The instances must meet the
 - **More than shells.** `ssh`, `scp`, `rsync`, `git` and editors' remote mode reach
   any instance as `tools.hop` after `hop init ssh`. `hop run` for one-off commands
   (exit code preserved), `hop tunnel` for port forwarding (also to hosts behind the
-  instance), `hop push` for small files with a SHA-256 check.
+  instance), `hop push` and `hop pull` to copy files with a SHA-256 check (`pull` with
+  no size limit and no SSH key).
 - **A health check for your AWS setup.** `hop doctor` spots expired tokens, revoked or
   long-lived keys, profiles defined twice, unlogged accounts and more, each with the
   command that fixes it.
@@ -261,7 +262,8 @@ typed (`hop -p acme-prod <Tab>`).
 | One-off command | `hop run tools uptime` |
 | Port forwarding | `hop tunnel tools 3000`, `hop tunnel tools 5432 15432 --host db.internal` |
 | ssh, scp, rsync | `hop init ssh >> ~/.ssh/config` once, then `ssh ec2-user@tools.hop` |
-| Copy a small file | `hop push ./app.conf tools /etc/app.conf` |
+| Upload a small file | `hop push ./app.conf tools /etc/app.conf` |
+| Download a file | `hop pull tools /var/log/app.log`, `hop pull tools /etc/app.conf conf/` |
 | SSO login | `hop login`, `hop login --status`, `hop login acme` |
 | Check your setup | `hop doctor` |
 | Find forgotten regions | `hop scan`, `hop scan --write` |
@@ -339,6 +341,30 @@ through a session:
 `hop run` prints the output once the command ends (24,000 characters per stream at
 most, where SSM cuts it) and waits 2 minutes by default (`--timeout`). A command the instance has
 not picked up when hop stops waiting is canceled.
+
+### Downloading a file
+
+`hop pull` goes through a Session Manager session that runs a single command
+(`AWS-StartNonInteractiveCommand`), so it needs no SSH key and has no size limit:
+
+```bash
+hop pull tools /var/log/app.log                  # to ./app.log
+hop pull tools /etc/nginx/nginx.conf conf/       # to conf/nginx.conf
+hop pull db /var/backups/db.sql.gz /tmp/prod.sql.gz
+```
+
+- The file is read as the session user (`ssm-user` by default), or with `sudo -n`
+  when that user cannot read it. Linux and macOS instances only.
+- hop writes it under a temporary name, then renames it once the SHA-256 matches on
+  both sides: an interrupted download leaves nothing behind. A new file is readable
+  by you only; an existing one is replaced and keeps its mode.
+- While it streams, the SSM agent keeps the output on the instance's disk, in base64
+  (a third more than the file): for a large file, check the free space there.
+- CloudTrail records the `StartSession` call. When the account logs sessions, the log
+  may keep a copy of the file, base64-encoded. Like `hop tunnel`, it opens no shell:
+  `transcript: require` does not apply.
+- Your role needs `ssm:StartSession` on the `AWS-StartNonInteractiveCommand` document
+  (see [IAM permissions](#iam-permissions)).
 
 ### SSH, scp and rsync
 
@@ -419,7 +445,7 @@ external IP and no bastion. It is a first step, not yet at the level of AWS:
 | Search across accounts or projects | yes | yes |
 | Shell | Session Manager | `gcloud compute ssh --tunnel-through-iap` |
 | Session logging check | yes | no: GCP does not record shell sessions |
-| `run`, `tunnel`, `push`, ssh by name | yes | not yet: hop prints the gcloud command instead |
+| `run`, `tunnel`, `push`, `pull`, ssh by name | yes | not yet: hop prints the gcloud command instead |
 
 Turn it on in hop's configuration:
 
@@ -489,8 +515,8 @@ hop also writes `~/.cache/hop/inventory.json` (instances, no credentials) and
 | `ec2:DescribeInstances` | inventory |
 | `ssm:DescribeInstanceInformation` | agent status, hybrid nodes |
 | `ssm:GetDocument` | session logging check |
-| `ssm:StartSession` | shell, tunnel, ssh |
-| `ssm:TerminateSession`, `ssm:ResumeSession`, `ssmmessages:OpenDataChannel` | shell, tunnel, ssh (your own sessions, also used by `session-manager-plugin`) |
+| `ssm:StartSession` | shell, tunnel, ssh, `hop pull` |
+| `ssm:TerminateSession`, `ssm:ResumeSession`, `ssmmessages:OpenDataChannel` | shell, tunnel, ssh, `hop pull` (your own sessions, also used by `session-manager-plugin`) |
 | `kms:GenerateDataKey` | shell, when the account encrypts sessions with KMS |
 | `ssm:SendCommand`, `ssm:GetCommandInvocation` | `hop run`, `hop push` |
 | `ssm:CancelCommand` | `hop run`, `hop push` (cancels a command the instance never picked up) |
@@ -528,7 +554,8 @@ As a policy for your role (or permission set):
         "arn:aws:ssm:*:*:document/SSM-SessionManagerRunShell",
         "arn:aws:ssm:*:*:document/AWS-StartPortForwardingSession",
         "arn:aws:ssm:*:*:document/AWS-StartPortForwardingSessionToRemoteHost",
-        "arn:aws:ssm:*:*:document/AWS-StartSSHSession"
+        "arn:aws:ssm:*:*:document/AWS-StartSSHSession",
+        "arn:aws:ssm:*:*:document/AWS-StartNonInteractiveCommand"
       ]
     },
     {
@@ -574,7 +601,8 @@ The session statements follow the AWS sample policies for Session Manager. Every
 resource can be narrowed: instances to some accounts and regions, or to tags with an
 `ssm:resourceTag/...` condition, and the KMS key to the one in your session
 preferences. Drop what you do not use: `RunAndPush` and `FollowCommands` without
-`run` and `push`, `KMSEncryptedSessions` when sessions are not KMS-encrypted,
+`run` and `push`, the `AWS-StartNonInteractiveCommand` document without `pull`,
+`KMSEncryptedSessions` when sessions are not KMS-encrypted,
 `ec2:DescribeRegions` without `hop scan`. In AWS GovCloud (US) or China, ARNs start
 with `arn:aws-us-gov:` or `arn:aws-cn:`.
 
@@ -609,7 +637,7 @@ hop is a client-side tool built around the whole fleet:
   terminal;
 - `ssh`, `scp` and `rsync` by instance name through `hop init ssh`;
 - `run` keeps the remote exit code and cancels commands the instance never picked up;
-  `push` compares the SHA-256 on both sides;
+  `push` and `pull` compare the SHA-256 on both sides;
 - `hop doctor` for the local AWS setup.
 
 What hop does not do (yet): ECS or EKS sessions, ephemeral SSH keys, a VPN-like
