@@ -64,13 +64,15 @@ func TestSelectedProfiles(t *testing.T) {
 func TestPairs(t *testing.T) {
 	cfg := &config.Config{ExtraRegions: map[string][]string{"acme-prod": {"us-east-1"}}}
 	a := newTestApp(t, cfg, filters{})
+	// Token names the SSO token a profile signs in with: the session, or the start URL
+	// of the legacy format. Profiles that share one never renew it at the same time.
 	want := []inventory.Pair{
-		{Profile: "acme-prod", Region: "eu-west-1"},
-		{Profile: "acme-prod", Region: "us-east-1"},
+		{Profile: "acme-prod", Region: "eu-west-1", Token: "acme-sso"},
+		{Profile: "acme-prod", Region: "us-east-1", Token: "acme-sso"},
 		// Defined with SSO and keys: queried through SSO.
-		{Profile: "acme-data", Region: "eu-west-1", PreferSSO: true},
-		{Profile: "globex", Region: "us-east-1"},
-		// No region on the profile: the one from [default].
+		{Profile: "acme-data", Region: "eu-west-1", PreferSSO: true, Token: "acme-sso"},
+		{Profile: "globex", Region: "us-east-1", Token: "https://globex.awsapps.com/start"},
+		// No region on the profile: the one from [default]. Static keys: no token.
 		{Profile: "acme-billing", Region: "eu-west-1"},
 	}
 	if got := a.pairs(); !reflect.DeepEqual(got, want) {
@@ -82,7 +84,7 @@ func TestPairs(t *testing.T) {
 
 	// -r replaces the regions of every profile, extra regions included.
 	a = newTestApp(t, cfg, filters{profiles: []string{"acme-prod", "globex"}, regions: []string{"ap-south-1"}})
-	want = []inventory.Pair{{Profile: "acme-prod", Region: "ap-south-1"}, {Profile: "globex", Region: "ap-south-1"}}
+	want = []inventory.Pair{{Profile: "acme-prod", Region: "ap-south-1", Token: "acme-sso"}, {Profile: "globex", Region: "ap-south-1", Token: "https://globex.awsapps.com/start"}}
 	if got := a.pairs(); !reflect.DeepEqual(got, want) {
 		t.Errorf("pairs with -r:\n got %+v\nwant %+v", got, want)
 	}
@@ -1133,6 +1135,23 @@ source_profile = vault
 role_arn = arn:aws:iam::666666666666:role/Admin
 source_profile = loop
 `
+
+func TestTokenKeyFollowsTheCredentialChain(t *testing.T) {
+	a := newTestApp(t, nil, filters{})
+	a.files = loadFiles(t, chainConfig, fleetCredentials)
+	// A role assumed from an SSO profile renews the same token as that profile.
+	for profile, want := range map[string]string{
+		"acme-prod": "acme-sso", "acme-admin": "acme-sso", "acme-admin-2": "acme-sso",
+		"acme-billing": "", "billing-admin": "", "vault": "", "vault-admin": "", "loop": "", "unknown": "",
+	} {
+		if got := a.tokenKey(profile); got != want {
+			t.Errorf("tokenKey(%q) = %q, want %q", profile, got, want)
+		}
+	}
+	if p := a.pairOf(instance("admin-app", "i-22", "acme-admin", "eu-west-1", "running", "")); p.Token != "acme-sso" {
+		t.Errorf("pairOf: %+v", p)
+	}
+}
 
 func TestCredentialChains(t *testing.T) {
 	a := newTestApp(t, nil, filters{})

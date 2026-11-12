@@ -332,14 +332,66 @@ func ParseSessionPrefs(content string) Transcript {
 type Pair struct {
 	Profile, Region string
 	PreferSSO       bool
+	// Token identifies the SSO token the profile signs in with, directly or through
+	// the source_profile of an assumed role: the key of its cache file (see
+	// awsconf.Profile.PortalKey). It is empty for a profile that does not go through
+	// SSO. Profiles with the same Token never renew it at the same time (see
+	// TokenGate).
+	Token string
+}
+
+// TokenGate keeps the profiles that share an SSO token from renewing it at the same
+// time. The SDK renews an expired token by itself when a profile first needs
+// credentials, and rewrites the cache file of the token. Several profiles behind one
+// portal, loaded in parallel, would all do so at once: the one that loses the race for
+// the file fails, with an error that reads like an expired token, and a portal that
+// accepts a refresh token only once refuses the others.
+//
+// The zero value is ready to use.
+type TokenGate struct {
+	mu    sync.Mutex
+	first map[string]*sync.Once
+}
+
+// Retrieve resolves the credentials of cfg, the configuration of a profile that signs
+// in with token (see Pair.Token), before its first call to AWS. The first profile of a
+// token does it alone, which renews the token when it has expired. The others wait for
+// it, then resolve their own in parallel: they find the renewed token in the cache
+// file. A profile without a token is not held up.
+func (g *TokenGate) Retrieve(ctx context.Context, token string, cfg aws.Config) error {
+	if token != "" {
+		g.mu.Lock()
+		if g.first == nil {
+			g.first = map[string]*sync.Once{}
+		}
+		once := g.first[token]
+		if once == nil {
+			once = new(sync.Once)
+			g.first[token] = once
+		}
+		g.mu.Unlock()
+		var err error
+		ran := false
+		once.Do(func() {
+			ran = true
+			_, err = cfg.Credentials.Retrieve(ctx)
+		})
+		if ran {
+			return err
+		}
+	}
+	_, err := cfg.Credentials.Retrieve(ctx)
+	return err
 }
 
 // FetchAll queries the pairs in parallel, sixteen at a time. Each profile is loaded
 // once and its regions share that configuration, credentials cache included: an SSO
-// role or an assumed role is resolved once per profile, not once per region. progress
-// is called each time a pair completes.
+// role or an assumed role is resolved once per profile, not once per region. Profiles
+// that share an SSO token wait for the first of them to resolve its credentials (see
+// TokenGate). progress is called each time a pair completes.
 func FetchAll(ctx context.Context, pairs []Pair, timeout time.Duration, progress func(done, total int)) []*Target {
 	out := make([]*Target, len(pairs))
+	var gate TokenGate
 	profiles := map[profileKey]*profileConfig{}
 	for _, p := range pairs {
 		if k := (profileKey{p.Profile, p.PreferSSO}); profiles[k] == nil {
@@ -357,7 +409,7 @@ func FetchAll(ctx context.Context, pairs []Pair, timeout time.Duration, progress
 			defer func() { <-sem }()
 			cctx, cancel := context.WithTimeout(ctx, timeout)
 			defer cancel()
-			out[i] = pc.fetch(cctx, p)
+			out[i] = pc.fetch(cctx, p, &gate)
 			mu.Lock()
 			done++
 			if progress != nil {
@@ -384,13 +436,16 @@ type profileConfig struct {
 }
 
 // fetch queries a pair of the profile, with a copy of its configuration set to the
-// pair's region.
-func (pc *profileConfig) fetch(ctx context.Context, p Pair) *Target {
+// pair's region, once gate lets the profile resolve its credentials.
+func (pc *profileConfig) fetch(ctx context.Context, p Pair, gate *TokenGate) *Target {
 	pc.once.Do(func() { pc.cfg, pc.err = AWSConfig(ctx, p.Profile, p.Region, p.PreferSSO) })
 	if pc.err != nil {
 		return failed(p, time.Now(), pc.err)
 	}
 	cfg := pc.cfg.Copy()
 	cfg.Region = p.Region
+	if err := gate.Retrieve(ctx, p.Token, cfg); err != nil {
+		return failed(p, time.Now(), err)
+	}
 	return fetch(ctx, cfg, p)
 }

@@ -35,6 +35,17 @@ All notable changes to hop are listed here. The format follows
 - The IAM policy in the README has three more statements: `S3Buckets` and `S3Objects`,
   to drop without `hop s3`, and `RelayBucket`, to drop without a relay bucket.
 
+### Fixed
+
+- Profiles behind one SSO portal no longer renew its token all at once. When the
+  access token had expired, each profile queried in parallel renewed it and rewrote
+  the same cache file: one of them lost the race and was reported as
+  `SSO token expired`, with `hop login` as the fix, though the token was good and the
+  next run worked. The first profile of a portal now resolves its credentials alone,
+  and the others follow with the renewed token. `hop ls`, `hop scan`, the search and
+  `hop s3` are covered. Should another program still win the race for the file, hop
+  no longer calls it an expired token.
+
 ### Changed
 
 - `s3` is now a command: to search an instance by that word first, write

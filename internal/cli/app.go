@@ -274,7 +274,7 @@ func (a *app) pairsIn(regions []string) []inventory.Pair {
 			rs = regions
 		}
 		for _, r := range rs {
-			out = append(out, inventory.Pair{Profile: p.Name, Region: r, PreferSSO: p.PreferSSO()})
+			out = append(out, inventory.Pair{Profile: p.Name, Region: r, PreferSSO: p.PreferSSO(), Token: a.tokenKey(p.Name)})
 		}
 	}
 	if a.gcpInScope(regions) {
@@ -297,7 +297,7 @@ func (a *app) keys() []string {
 }
 
 func (a *app) pairOf(in inventory.Instance) inventory.Pair {
-	return inventory.Pair{Profile: in.Profile, Region: in.Region, PreferSSO: a.preferSSO(in.Profile)}
+	return inventory.Pair{Profile: in.Profile, Region: in.Region, PreferSSO: a.preferSSO(in.Profile), Token: a.tokenKey(in.Profile)}
 }
 
 // rootProfile follows source_profile from an assume-role profile to the profile that
@@ -320,6 +320,17 @@ func (a *app) ssoPortal(profile string) (awsconf.Portal, bool) {
 		return awsconf.Portal{}, false
 	}
 	return a.files.PortalOf(p.Name)
+}
+
+// tokenKey identifies the SSO token a profile signs in with, directly or through the
+// source_profile of an assumed role, or is empty for a profile that does not go through
+// a portal. Profiles with the same key are never left to renew the token at the same
+// time (see inventory.TokenGate).
+func (a *app) tokenKey(profile string) string {
+	if pt, ok := a.ssoPortal(profile); ok {
+		return pt.Key
+	}
+	return ""
 }
 
 // invalidatePortal forces the next refresh of every profile that signs in through the

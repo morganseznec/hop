@@ -129,6 +129,8 @@ func (a *app) scan(ctx context.Context) ([]scanHit, []string) {
 	}
 	profiles := a.selectedProfiles()
 	total = len(profiles)
+	// Profiles behind one SSO portal must not renew its token all at once.
+	var gate inventory.TokenGate
 	for _, p := range profiles {
 		wg.Add(1)
 		go func() {
@@ -137,6 +139,9 @@ func (a *app) scan(ctx context.Context) ([]scanHit, []string) {
 			known := a.cfg.Regions(p.Name, p.Region, a.files.DefaultRegion)
 			cctx, cancel := context.WithTimeout(ctx, 20*time.Second)
 			cfg, err := inventory.AWSConfig(cctx, p.Name, known[0], p.PreferSSO())
+			if err == nil {
+				err = gate.Retrieve(cctx, a.tokenKey(p.Name), cfg)
+			}
 			var regions []string
 			if err == nil {
 				regions, err = enabledRegions(cctx, cfg)

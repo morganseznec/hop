@@ -130,10 +130,12 @@ const bucketPage = 1000
 
 // FetchBuckets lists the buckets of the account behind each profile, sixteen profiles at
 // a time. The region of a pair is only the endpoint the call goes to. It never returns
-// an error: each BucketList carries its own. progress is called each time a profile
-// completes.
+// an error: each BucketList carries its own. As in FetchAll, profiles that share an SSO
+// token wait for the first of them to resolve its credentials. progress is called each
+// time a profile completes.
 func FetchBuckets(ctx context.Context, pairs []Pair, timeout time.Duration, progress func(done, total int)) []*BucketList {
 	out := make([]*BucketList, len(pairs))
+	var gate TokenGate
 	sem := make(chan struct{}, 16)
 	var wg sync.WaitGroup
 	var mu sync.Mutex
@@ -144,7 +146,7 @@ func FetchBuckets(ctx context.Context, pairs []Pair, timeout time.Duration, prog
 			defer func() { <-sem }()
 			cctx, cancel := context.WithTimeout(ctx, timeout)
 			defer cancel()
-			out[i] = fetchBuckets(cctx, p)
+			out[i] = fetchBuckets(cctx, p, &gate)
 			mu.Lock()
 			done++
 			if progress != nil {
@@ -157,7 +159,7 @@ func FetchBuckets(ctx context.Context, pairs []Pair, timeout time.Duration, prog
 	return out
 }
 
-func fetchBuckets(ctx context.Context, p Pair) *BucketList {
+func fetchBuckets(ctx context.Context, p Pair, gate *TokenGate) *BucketList {
 	start := time.Now()
 	fail := func(err error) *BucketList {
 		return &BucketList{Profile: p.Profile, Err: Redact(err.Error()), ErrKind: Classify(err), ErrAt: start}
@@ -167,7 +169,7 @@ func fetchBuckets(ctx context.Context, p Pair) *BucketList {
 		return fail(err)
 	}
 	// As for instances: an expired SSO token fails here, quickly and with a typed error.
-	if _, err := cfg.Credentials.Retrieve(ctx); err != nil {
+	if err := gate.Retrieve(ctx, p.Token, cfg); err != nil {
 		return fail(err)
 	}
 	l := &BucketList{Profile: p.Profile, FetchedAt: start, Buckets: []Bucket{}}

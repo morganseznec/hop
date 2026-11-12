@@ -51,7 +51,7 @@ func (a *app) staleBuckets(maxAge time.Duration, force bool) []inventory.Pair {
 		if a.fetchedBuckets[p.Name] {
 			continue
 		}
-		pair := inventory.Pair{Profile: p.Name, Region: a.mainRegion(p.Name), PreferSSO: p.PreferSSO()}
+		pair := inventory.Pair{Profile: p.Name, Region: a.mainRegion(p.Name), PreferSSO: p.PreferSSO(), Token: a.tokenKey(p.Name)}
 		l, ok := a.inv.Buckets[p.Name]
 		switch {
 		case ok && l.ErrKind == inventory.ErrMFA:
