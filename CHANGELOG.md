@@ -6,6 +6,11 @@ All notable changes to hop are listed here. The format follows
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-11-12
+
+Adds `hop s3`, for the S3 buckets of every account, and lets `hop push` carry files
+of any size through a relay bucket.
+
 ### Added
 
 - `hop s3 ls` lists the S3 buckets of every AWS profile, each with the region it lives
@@ -35,6 +40,17 @@ All notable changes to hop are listed here. The format follows
 - The IAM policy in the README has three more statements: `S3Buckets` and `S3Objects`,
   to drop without `hop s3`, and `RelayBucket`, to drop without a relay bucket.
 
+### Changed
+
+- `s3` is now a command: to search an instance by that word first, write
+  `hop -- s3 gateway` or put the word elsewhere (`hop gateway s3`).
+- `hop ls -h` and `hop s3 ls -h` still show the help; next to `-l`, `-h` means sizes in
+  KB, MB and GB.
+- The message of `hop push` for a file over 64 KB names `relay_buckets` instead of
+  sending you to S3 by hand.
+- hop is built with Go 1.27.4. Go 1.27.3 carried GO-2026-6859, a crash of HTTP/1
+  servers in `net/http`: hop serves nothing over HTTP, and is not affected.
+
 ### Fixed
 
 - Profiles behind one SSO portal no longer renew its token all at once. When the
@@ -45,15 +61,6 @@ All notable changes to hop are listed here. The format follows
   and the others follow with the renewed token. `hop ls`, `hop scan`, the search and
   `hop s3` are covered. Should another program still win the race for the file, hop
   no longer calls it an expired token.
-
-### Changed
-
-- `s3` is now a command: to search an instance by that word first, write
-  `hop -- s3 gateway` or put the word elsewhere (`hop gateway s3`).
-- `hop ls -h` and `hop s3 ls -h` still show the help; next to `-l`, `-h` means sizes in
-  KB, MB and GB.
-- The message of `hop push` for a file over 64 KB names `relay_buckets` instead of
-  sending you to S3 by hand.
 
 ## [0.4.0] - 2026-11-07
 
@@ -322,7 +329,8 @@ First release.
   and Arch Linux packages, and a hardened Alpine image on GHCR. The Homebrew cask
   came with v0.1.1.
 
-[Unreleased]: https://github.com/morganseznec/hop/compare/v0.4.0...HEAD
+[Unreleased]: https://github.com/morganseznec/hop/compare/v0.5.0...HEAD
+[0.5.0]: https://github.com/morganseznec/hop/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/morganseznec/hop/compare/v0.3.2...v0.4.0
 [0.3.2]: https://github.com/morganseznec/hop/compare/v0.3.1...v0.3.2
 [0.3.1]: https://github.com/morganseznec/hop/compare/v0.3.0...v0.3.1
