@@ -224,6 +224,10 @@ func explainFetch(stderr string) string {
 		return "the instance has neither curl nor wget to fetch the file"
 	case strings.Contains(s, "is not the file sent"):
 		return "what the instance downloaded differs from the file sent"
+	case strings.Contains(s, "wget") && (strings.Contains(s, "unrecognized option") || strings.Contains(s, "invalid option")):
+		// The wget of BusyBox (Alpine) has no -i: it would need the URL as an argument,
+		// where the process list shows it.
+		return "the wget of the instance cannot read the URL from stdin (BusyBox), and there is no curl: install curl on the instance"
 	case strings.Contains(s, "403"):
 		return "S3 refused the download (403): a policy of the bucket, or of the VPC endpoint the instance goes through, does not allow it, or the credentials that signed the URL expired"
 	case strings.Contains(s, "could not resolve") || strings.Contains(s, "unable to resolve") || strings.Contains(s, "timed out") ||

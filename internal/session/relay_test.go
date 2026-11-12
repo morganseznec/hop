@@ -330,6 +330,7 @@ func TestExplainFetch(t *testing.T) {
 		"curl: (28) Connection timed out after 300000 milliseconds":                 "the instance cannot reach S3",
 		"wget: unable to resolve host address 'acme-relay.s3'":                      "the instance cannot reach S3",
 		"no curl or wget on the instance":                                           "neither curl nor wget",
+		"wget: unrecognized option: i\nBusyBox v1.37.0 multi-call binary":           "cannot read the URL from stdin (BusyBox)",
 		"curl: (23) Failure writing output to destination: No space left on device": "no space left on the instance",
 		"sh: 1: cannot create /root/x: Permission denied":                           "",
 	} {

@@ -413,9 +413,10 @@ What it takes, and where it stops:
 - **Your role** needs `s3:PutObject`, `s3:GetObject`, `s3:DeleteObject` and
   `s3:AbortMultipartUpload` on the bucket (or on the prefix). hop tries the write and
   the read before it asks the instance anything, and names the one that is missing.
-- **The instance** needs no S3 permission: only `curl` or `wget`, a way to reach S3
-  (a VPC endpoint for S3, or a route out, that the endpoint and bucket policies do not
-  close), and room for the file twice next to the destination while it is copied.
+- **The instance** needs no S3 permission: only `curl` (or GNU `wget`; the one of
+  BusyBox cannot take the URL from stdin), a way to reach S3 (a VPC endpoint for S3,
+  or a route out, that the endpoint and bucket policies do not close), and room for
+  the file twice next to the destination while it is copied.
 - **The object goes** once the copy is checked, or has failed. It stays in two cases,
   and hop says so: your role may not delete it, or hop stopped waiting (Ctrl-C, or
   the time allowed) while the instance was still fetching it. A lifecycle rule that
