@@ -297,7 +297,8 @@ func explainSend(err error, id string) error {
 	return err
 }
 
-// PushLimit is the largest file Push accepts, in bytes. SendCommand takes 97 KB at most,
+// PushLimit is the largest file Push accepts, in bytes: past it, PushVia goes through a
+// relay bucket. SendCommand takes 97 KB at most,
 // the document and its parameters together, and refuses more with
 // MaxDocumentSizeExceeded before anything reaches the instance. In base64, 64,000 bytes
 // become 85,336 characters, which leaves room for the rest of the script, a remote path
@@ -307,10 +308,8 @@ const PushLimit = 64_000
 // CheckPush refuses what Push would refuse, without reading the file or calling AWS:
 // a remote path that is not absolute, or a local file larger than PushLimit.
 func CheckPush(local, remote string) error {
-	if !strings.HasPrefix(remote, "/") {
-		// A relative path would land in the working directory the SSM agent creates for
-		// each command.
-		return fmt.Errorf("remote path must be absolute (start with /): %s", remote)
+	if err := CheckRemote(remote); err != nil {
+		return err
 	}
 	st, err := os.Stat(local)
 	if err != nil {
@@ -321,7 +320,7 @@ func CheckPush(local, remote string) error {
 
 func checkSize(local string, n int64) error {
 	if n > PushLimit {
-		return fmt.Errorf("%s: %d bytes, too large for this method (limit %d): go through S3 instead", local, n, PushLimit)
+		return fmt.Errorf("%s: %d bytes, too large for SSM alone (limit %d): with a relay bucket in hop's configuration (relay_buckets), hop push sends it through S3", local, n, PushLimit)
 	}
 	return nil
 }

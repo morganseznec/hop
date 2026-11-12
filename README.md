@@ -89,8 +89,11 @@ A partial or fuzzy match asks before connecting. The instances must meet the
 - **More than shells.** `ssh`, `scp`, `rsync`, `git` and editors' remote mode reach
   any instance as `tools.hop` after `hop init ssh`. `hop run` for one-off commands
   (exit code preserved), `hop tunnel` for port forwarding (also to hosts behind the
-  instance), `hop push` and `hop pull` to copy files with a SHA-256 check (`pull` with
-  no size limit and no SSH key).
+  instance), `hop push` and `hop pull` to copy files with a SHA-256 check and no SSH
+  key (`pull` of any size, `push` of any size with a relay bucket).
+- **S3 across accounts.** `hop s3 ls` lists the buckets of every profile, each with
+  its region; `hop s3 pull` and `hop s3 push` copy objects without naming the account,
+  in parallel parts for large files, and never replace an object without asking.
 - **A health check for your AWS setup.** `hop doctor` spots expired tokens, revoked or
   long-lived keys, profiles defined twice, unlogged accounts and more, each with the
   command that fixes it.
@@ -262,8 +265,9 @@ typed (`hop -p acme-prod <Tab>`).
 | One-off command | `hop run tools uptime` |
 | Port forwarding | `hop tunnel tools 3000`, `hop tunnel tools 5432 15432 --host db.internal` |
 | ssh, scp, rsync | `hop init ssh >> ~/.ssh/config` once, then `ssh ec2-user@tools.hop` |
-| Upload a small file | `hop push ./app.conf tools /etc/app.conf` |
+| Upload a file | `hop push ./app.conf tools /etc/app.conf`, `hop push ./release.tar.gz web /opt/app/release.tar.gz` |
 | Download a file | `hop pull tools /var/log/app.log`, `hop pull tools /etc/app.conf conf/` |
+| S3 buckets and objects | `hop s3 ls`, `hop s3 ls -lh logs/2026/`, `hop s3 pull logs/2026/app.log`, `hop s3 push dump.sql backups/db/` |
 | SSO login | `hop login`, `hop login --status`, `hop login acme` |
 | Check your setup | `hop doctor` |
 | Find forgotten regions | `hop scan`, `hop scan --write` |
@@ -332,8 +336,10 @@ through a session:
 - they run as root, on Linux and macOS instances only;
 - the session logging settings (and `transcript: require`) do not apply to them;
 - the command, its parameters and its output stay in the SSM command history of the
-  account (about 30 days). For `push`, that includes the file content,
-  base64-encoded. Do not push secrets this way;
+  account (about 30 days). For a `push` of up to 64 KB, that includes the file
+  content, base64-encoded: do not push secrets this way. Through a
+  [relay bucket](#uploading-a-large-file) (a larger file, or `--relay`), the history
+  keeps a download URL that has expired, not the file;
 - CloudTrail records who sent each command, to which instance and with which
   document, but not the command itself: it shows the parameters as
   `HIDDEN_DUE_TO_SECURITY_REASONS`.
@@ -365,6 +371,139 @@ hop pull db /var/backups/db.sql.gz /tmp/prod.sql.gz
   `transcript: require` does not apply.
 - Your role needs `ssm:StartSession` on the `AWS-StartNonInteractiveCommand` document
   (see [IAM permissions](#iam-permissions)).
+
+### Uploading a large file
+
+SSM Run Command takes 97 KB per command, so `hop push` carries a file of up to 64 KB
+in the command itself. Past that, it goes through a **relay bucket**, with the same
+command:
+
+```console
+$ hop push ./release.tar.gz web /opt/app/release.tar.gz
+hop: ./release.tar.gz -> acme-p-web:/opt/app/release.tar.gz, 412.6 MB through s3://acme-tools-relay
+hop: uploaded: acme-p-web is fetching it (up to 8m52s)
+hop: copied, SHA-256 matches on both sides
+```
+
+1. hop uploads the file to the bucket under a random key, in parallel parts.
+2. hop signs a URL that downloads that one object, and sends the instance a short
+   script: it fetches the URL with `curl` or `wget` into a private directory next to
+   the destination, compares the SHA-256 with the one of the file sent, and only then
+   copies it over the destination. A download that fails leaves the file in place
+   untouched.
+3. hop compares the SHA-256 of the final file, and deletes the object.
+
+Name the bucket in hop's configuration, by profile or pattern:
+
+```yaml
+relay_buckets:
+  "acme-*": acme-tools-relay/hop     # a bucket, or a bucket and a key prefix
+  globex: globex-relay
+```
+
+What it takes, and where it stops:
+
+- **hop never creates the bucket.** It must exist, and a profile without a relay
+  bucket keeps the 64 KB limit, with a message that says so. hop sends the file to
+  the bucket you name: check the name, a mistyped one can be somebody else's. Someone allowed to
+  create buckets sets it up once; those who push only need rights on its objects.
+- **One bucket can serve every account.** The instance downloads with the signed URL,
+  so the bucket may live in another account or region than the instance, as long as
+  each profile that pushes may write to it.
+- **Your role** needs `s3:PutObject`, `s3:GetObject`, `s3:DeleteObject` and
+  `s3:AbortMultipartUpload` on the bucket (or on the prefix). hop tries the write and
+  the read before it asks the instance anything, and names the one that is missing.
+- **The instance** needs no S3 permission: only `curl` (or GNU `wget`; the one of
+  BusyBox cannot take the URL from stdin), a way to reach S3 (a VPC endpoint for S3,
+  or a route out, that the endpoint and bucket policies do not close), and room for
+  the file twice next to the destination while it is copied.
+- **The object goes** once the copy is checked, or has failed. It stays in two cases,
+  and hop says so: your role may not delete it, or hop stopped waiting (Ctrl-C, or
+  the time allowed) while the instance was still fetching it. A lifecycle rule that
+  expires objects after a day, and aborts incomplete multipart uploads, covers both.
+- **`--relay`** sends a small file the same way, to keep its content out of the SSM
+  command history: `hop push --relay ./api.key tools /etc/app/api.key`.
+
+The signed URL is valid for the time hop waits plus five minutes, and no longer than
+the credentials that signed it. It reaches the instance inside the script, never as a
+command argument, so the process list of the instance does not show it.
+
+### S3 buckets
+
+`hop s3` does for buckets what `hop ls` does for instances: one list across every
+profile, and no account or region to give.
+
+```console
+$ hop s3 ls
+  NAME            PROFILE    REGION     ENV   CREATED
+  acme-p-backups  acme-prod  eu-west-1  prod  2024-03-11
+  acme-p-logs     acme-prod  us-east-1  prod  2023-09-02
+  acme-t-scratch  acme-test  eu-west-1  test  2026-05-20
+3 buckets, 2 profiles (cached 4m ago, --refresh to query again)
+
+$ hop s3 ls -lh logs/2026/
+    SIZE  MODIFIED          CLASS     NAME
+       -  -                 -         11/
+  1.2 MB  2026-11-07 14:02  STANDARD  app.log
+   340 B  2026-11-09 08:30  STANDARD  readme.txt
+2 objects, 1 prefix, 1.2 MB in s3://acme-p-logs/2026/ (acme-prod, us-east-1)
+
+$ hop s3 pull logs/2026/app.log
+hop: s3://acme-p-logs/2026/app.log -> app.log (acme-prod, us-east-1)
+hop: 1.2 MB received, CRC64NVME matches on both sides
+```
+
+- **Buckets.** `hop s3 ls` takes one `ListBuckets` call per profile, cached like the
+  instances, and shows each bucket in the region it lives in. Words filter the list
+  (`hop s3 ls logs`), `-r` keeps the buckets of some regions, `-e` an environment,
+  read from the name of the bucket or of the profile. Listing instances never calls
+  S3.
+- **Objects.** An argument with a `/` names a place in a bucket: `acme-p-logs/` is
+  the top of the bucket, `acme-p-logs/2026/` what is under that prefix, grouped at the
+  next `/` like directories. The options are
+  those of `ls` and combine (`-alh`): `-l` for size, date and storage class, `-h` for
+  sizes in KB, MB and GB, `-a` for the names that start with a dot (left out
+  otherwise, and the footer says how many), `-R` for every object below, `-t` and
+  `-S` to sort. `-h` on its own stays the help, and reversing is `--reverse`, since
+  `-r` is `--region`. `--json` is for scripts.
+- **Which bucket.** The bucket part is searched like an instance name, among the
+  buckets listed. The exact name, or whole words of it (`logs/` for `acme-p-logs`),
+  is used directly; a looser match asks first, and without a terminal hop lists the
+  candidates and stops. After `s3://`, it is an exact name, as everywhere else in AWS
+  (`s3://acme-p-logs/2026/`): a word or a typo finds nothing.
+- **Buckets of other accounts.** S3 lists the buckets an account owns, not those it
+  may use. Name such a bucket exactly, after `s3://`, with the profile that reaches it:
+  `hop s3 ls -p acme-prod s3://partner-drop/in/`. hop reads from it; before uploading
+  to it, hop asks, and refuses without a terminal, since a mistyped name can be
+  somebody else's bucket. A search never tries a word as the name of an unlisted
+  bucket.
+- **Download.** `hop s3 pull <bucket>/<key> [local-path]` fetches a large object as
+  ranges of 8 MB, five at a time, into a temporary file renamed once it is complete.
+  hop compares the size, and the checksum S3 holds for the whole object when there is
+  one; otherwise it says that only the size was checked (an object sent without a
+  checksum, or in parts by a tool that kept only a checksum of its parts).
+- **Upload.** `hop s3 push <local-file> <bucket>[/<key>]` sends a file of 16 MB or
+  more as a multipart upload, in parts of 8 MB, five at a time, and aborts it when it
+  fails or is interrupted, so no part stays in the bucket. A key that ends with `/`
+  keeps the name of the file. hop never replaces an object without asking: it asks
+  when the key exists, refuses without a terminal unless `--force` is given, and S3
+  itself refuses the write if the object appeared meanwhile. S3 checks a CRC32 of
+  each request and returns the one of the whole object, which hop compares with the
+  file's.
+- **On the other commands.** `s3://` and the exact name tell a bucket from an
+  instance: `hop ls -lh s3://acme-p-logs/2026/`,
+  `hop pull s3://acme-p-logs/2026/app.log`,
+  `hop push ./dump.sql.gz s3://acme-p-backups/db/`.
+- **What it leaves behind.** CloudTrail records the `ListBuckets` call. It records
+  reads and writes of objects only in accounts that log S3 data events, which hop
+  cannot check: the session logging settings (and `transcript: require`) do not apply
+  to S3. `hop s3` never deletes an object.
+
+Your role needs the S3 actions listed in [IAM permissions](#iam-permissions). `hop s3`
+is AWS only: it does not list Google Cloud Storage buckets.
+
+Was your first search word `s3` (`hop s3 gateway`)? `s3` is now a command, like `ls`
+or `run`: put the word elsewhere (`hop gateway s3`) or write `hop -- s3 gateway`.
 
 ### SSH, scp and rsync
 
@@ -499,12 +638,18 @@ labels:
 
 # GCP projects to list as well (experimental, see GCP above).
 gcp_projects: ["*"]
+
+# Buckets that carry files too large for SSM to an instance (see "Uploading a large
+# file"): by profile or pattern, a bucket or a bucket and a key prefix.
+relay_buckets:
+  "acme-*": acme-tools-relay/hop
 ```
 
 `hop scan --write` rewrites this file to add regions: comments are not kept, and the
 previous version stays next to it as `config.yaml.bak`.
 
-hop also writes `~/.cache/hop/inventory.json` (instances, no credentials) and
+hop also writes `~/.cache/hop/inventory.json` (instances and bucket names, no
+credentials) and
 `~/.local/state/hop/recents.json` (recently used instances); on Windows both live in
 `%LocalAppData%\hop`. The XDG variables are honoured when set.
 
@@ -521,6 +666,12 @@ hop also writes `~/.cache/hop/inventory.json` (instances, no credentials) and
 | `ssm:SendCommand`, `ssm:GetCommandInvocation` | `hop run`, `hop push` |
 | `ssm:CancelCommand` | `hop run`, `hop push` (cancels a command the instance never picked up) |
 | `ec2:DescribeRegions` | `hop scan` |
+| `s3:ListAllMyBuckets` | `hop s3 ls` (the buckets of each account) |
+| `s3:ListBucket` | `hop s3 ls <bucket>/`, finding a bucket of another account, and telling a missing object from a refused one |
+| `s3:GetObject` | `hop s3 pull`, and the look `hop s3 push` takes before replacing an object |
+| `s3:PutObject`, `s3:AbortMultipartUpload` | `hop s3 push` |
+| `s3:PutObject`, `s3:GetObject`, `s3:DeleteObject`, `s3:AbortMultipartUpload` on the relay bucket | `hop push` of more than 64 KB, or with `--relay` |
+| `kms:Decrypt`, `kms:GenerateDataKey` | `hop s3 pull` and `hop s3 push` on a bucket encrypted with a KMS key |
 
 As a policy for your role (or permission set):
 
@@ -592,6 +743,37 @@ As a policy for your role (or permission set):
       "Effect": "Allow",
       "Action": "kms:GenerateDataKey",
       "Resource": "arn:aws:kms:*:*:key/*"
+    },
+    {
+      "Sid": "S3Buckets",
+      "Effect": "Allow",
+      "Action": "s3:ListAllMyBuckets",
+      "Resource": "*"
+    },
+    {
+      "Sid": "S3Objects",
+      "Effect": "Allow",
+      "Action": [
+        "s3:ListBucket",
+        "s3:GetObject",
+        "s3:PutObject",
+        "s3:AbortMultipartUpload"
+      ],
+      "Resource": [
+        "arn:aws:s3:::acme-*",
+        "arn:aws:s3:::acme-*/*"
+      ]
+    },
+    {
+      "Sid": "RelayBucket",
+      "Effect": "Allow",
+      "Action": [
+        "s3:PutObject",
+        "s3:GetObject",
+        "s3:DeleteObject",
+        "s3:AbortMultipartUpload"
+      ],
+      "Resource": "arn:aws:s3:::acme-tools-relay/hop/*"
     }
   ]
 }
@@ -603,8 +785,17 @@ resource can be narrowed: instances to some accounts and regions, or to tags wit
 preferences. Drop what you do not use: `RunAndPush` and `FollowCommands` without
 `run` and `push`, the `AWS-StartNonInteractiveCommand` document without `pull`,
 `KMSEncryptedSessions` when sessions are not KMS-encrypted,
-`ec2:DescribeRegions` without `hop scan`. In AWS GovCloud (US) or China, ARNs start
-with `arn:aws-us-gov:` or `arn:aws-cn:`.
+`ec2:DescribeRegions` without `hop scan`, `S3Buckets` and `S3Objects` without
+`hop s3`, `RelayBucket` without a relay bucket. In AWS GovCloud (US) or China, ARNs
+start with `arn:aws-us-gov:` or `arn:aws-cn:`.
+
+`S3Objects` gives access to data, not to machines: name the buckets hop may read
+(`acme-*` above is an example), keep `s3:PutObject` and `s3:AbortMultipartUpload` for
+the ones you upload to, and add `kms:Decrypt` and `kms:GenerateDataKey` on the key of
+a bucket encrypted with KMS. `hop s3` needs no `s3:DeleteObject`: it never deletes.
+The only object hop deletes is the temporary copy it wrote itself to a relay bucket,
+which is why `RelayBucket` names that bucket, and here a prefix of it, and nothing
+else.
 
 The **instance role** needs more than `AmazonSSMManagedInstanceCore` when the account
 logs sessions, since the agent writes the log itself: `logs:CreateLogStream`,
@@ -637,11 +828,15 @@ hop is a client-side tool built around the whole fleet:
   terminal;
 - `ssh`, `scp` and `rsync` by instance name through `hop init ssh`;
 - `run` keeps the remote exit code and cancels commands the instance never picked up;
-  `push` and `pull` compare the SHA-256 on both sides;
+  `push` and `pull` compare the SHA-256 on both sides, and `push` carries large files
+  through a bucket without giving the instance any S3 permission;
+- the S3 buckets of every account in one list, and objects copied by bucket name,
+  without replacing one unasked;
 - `hop doctor` for the local AWS setup.
 
 What hop does not do (yet): ECS or EKS sessions, ephemeral SSH keys, a VPN-like
-tunnel, or a command on many instances at once. Issues and pull requests are welcome.
+tunnel, a command on many instances at once, or what `aws s3 sync` and `aws s3 rm`
+do (whole directories, deletions). Issues and pull requests are welcome.
 
 ## Contributing
 

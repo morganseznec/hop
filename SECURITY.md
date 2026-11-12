@@ -24,7 +24,8 @@ Only the latest release receives security fixes.
 In scope:
 
 - hop connecting, running a command or copying a file somewhere the user did not
-  choose (for example a fuzzy match acting without confirmation);
+  choose (for example a fuzzy match acting without confirmation), or replacing an S3
+  object without a confirmation;
 - credentials, tokens or command output written to disk or logs by hop;
 - the session logging check reporting a session as logged when it is not.
 
@@ -34,7 +35,9 @@ Out of scope: the security of AWS Session Manager itself, the
 ## What hop stores
 
 - `~/.cache/hop/inventory.json`: instance names, IDs, private IPs, regions and the
-  session logging settings of each account. No credentials.
+  session logging settings of each account, and, once `hop s3` was used, the names,
+  regions and creation dates of its S3 buckets. No credentials, no object keys and no
+  object content.
 - `~/.local/state/hop/recents.json`: which instances you used, and when.
 - `~/.config/hop/config.yaml`: only what you write there, and the regions that
   `hop scan --write` adds.

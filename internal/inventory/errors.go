@@ -68,6 +68,12 @@ func Classify(err error) ErrKind {
 		}
 	}
 	msg := strings.ToLower(err.Error())
+	// The token was renewed, but its cache file could not be rewritten: another
+	// process renewed it at the same moment. The token is not expired, and signing in
+	// again would fix nothing: the next call finds the token the other process wrote.
+	if strings.Contains(msg, "unable to cache refreshed sso token") {
+		return ErrOther
+	}
 	for _, m := range ssoTokenMessages {
 		if strings.Contains(msg, m) {
 			return ErrSSOExpired
@@ -114,7 +120,9 @@ func classifyCode(code, service string) ErrKind {
 		if service == "SSO OIDC" {
 			return ErrSSOExpired
 		}
-	case "AuthFailure", "InvalidClientTokenId", "SignatureDoesNotMatch", "UnrecognizedClientException", "ExpiredToken", "RequestExpired":
+	case "AuthFailure", "InvalidClientTokenId", "InvalidAccessKeyId", "SignatureDoesNotMatch", "UnrecognizedClientException", "ExpiredToken", "RequestExpired":
+		// InvalidAccessKeyId is what S3 answers where the other services say
+		// InvalidClientTokenId.
 		return ErrBadKeys
 	case "UnauthorizedOperation", "ForbiddenException":
 		// ForbiddenException: the SSO portal no longer grants this role (permission

@@ -397,3 +397,55 @@ func TestRegionsDoesNotAliasConfig(t *testing.T) {
 		t.Errorf("configuration modified through the result: %v", cfg.ExtraRegions)
 	}
 }
+
+func TestRelayBucket(t *testing.T) {
+	c := &Config{RelayBuckets: map[string]string{
+		"acme-prod": "acme-prod-relay",
+		"acme-*":    "acme-relay/hop",
+		"*":         "central-relay",
+		"acme-p*":   "acme-p-relay",
+	}}
+	for profile, want := range map[string]string{
+		// The profile's own name wins over any pattern.
+		"acme-prod": "acme-prod-relay",
+		// Then the longest pattern, the most specific one.
+		"acme-preprod": "acme-p-relay",
+		"acme-test":    "acme-relay/hop",
+		"globex":       "central-relay",
+	} {
+		if got := c.RelayBucket(profile); got != want {
+			t.Errorf("RelayBucket(%q) = %q, want %q", profile, got, want)
+		}
+	}
+	if got := (&Config{}).RelayBucket("acme-prod"); got != "" {
+		t.Errorf("without relay_buckets: %q", got)
+	}
+	if got := (&Config{RelayBuckets: map[string]string{"globex": "x"}}).RelayBucket("acme-prod"); got != "" {
+		t.Errorf("no match: %q", got)
+	}
+}
+
+func TestLoadRelayBuckets(t *testing.T) {
+	tempConfigDir(t)
+	writeConfig(t, "relay_buckets:\n  acme-prod: acme-prod-relay\n  \"acme-*\": s3://acme-relay/tmp/hop\n")
+	c, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.RelayBucket("acme-prod") != "acme-prod-relay" || c.RelayBucket("acme-test") != "s3://acme-relay/tmp/hop" {
+		t.Errorf("relay buckets: %v", c.RelayBuckets)
+	}
+	for content, want := range map[string]string{
+		"relay_buckets:\n  \"acme-[\": acme-relay\n": "invalid pattern in relay_buckets",
+		"relay_buckets:\n  acme-prod: \"\"\n":        "needs a bucket",
+		"relay_buckets:\n  acme-prod: /tmp/hop\n":    "needs a bucket",
+		"relay_buckets:\n  acme-prod: s3://\n":       "needs a bucket",
+		"relay_buckets:\n  acme-prod: acme relay\n":  "needs a bucket",
+		"relay_buckets: acme-relay\n":                "cannot unmarshal",
+	} {
+		writeConfig(t, content)
+		if _, err := Load(); err == nil || !strings.Contains(err.Error(), want) {
+			t.Errorf("%q: error %v, want %q", content, err, want)
+		}
+	}
+}

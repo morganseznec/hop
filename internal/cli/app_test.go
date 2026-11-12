@@ -64,13 +64,15 @@ func TestSelectedProfiles(t *testing.T) {
 func TestPairs(t *testing.T) {
 	cfg := &config.Config{ExtraRegions: map[string][]string{"acme-prod": {"us-east-1"}}}
 	a := newTestApp(t, cfg, filters{})
+	// Token names the SSO token a profile signs in with: the session, or the start URL
+	// of the legacy format. Profiles that share one never renew it at the same time.
 	want := []inventory.Pair{
-		{Profile: "acme-prod", Region: "eu-west-1"},
-		{Profile: "acme-prod", Region: "us-east-1"},
+		{Profile: "acme-prod", Region: "eu-west-1", Token: "acme-sso"},
+		{Profile: "acme-prod", Region: "us-east-1", Token: "acme-sso"},
 		// Defined with SSO and keys: queried through SSO.
-		{Profile: "acme-data", Region: "eu-west-1", PreferSSO: true},
-		{Profile: "globex", Region: "us-east-1"},
-		// No region on the profile: the one from [default].
+		{Profile: "acme-data", Region: "eu-west-1", PreferSSO: true, Token: "acme-sso"},
+		{Profile: "globex", Region: "us-east-1", Token: "https://globex.awsapps.com/start"},
+		// No region on the profile: the one from [default]. Static keys: no token.
 		{Profile: "acme-billing", Region: "eu-west-1"},
 	}
 	if got := a.pairs(); !reflect.DeepEqual(got, want) {
@@ -82,7 +84,7 @@ func TestPairs(t *testing.T) {
 
 	// -r replaces the regions of every profile, extra regions included.
 	a = newTestApp(t, cfg, filters{profiles: []string{"acme-prod", "globex"}, regions: []string{"ap-south-1"}})
-	want = []inventory.Pair{{Profile: "acme-prod", Region: "ap-south-1"}, {Profile: "globex", Region: "ap-south-1"}}
+	want = []inventory.Pair{{Profile: "acme-prod", Region: "ap-south-1", Token: "acme-sso"}, {Profile: "globex", Region: "ap-south-1", Token: "https://globex.awsapps.com/start"}}
 	if got := a.pairs(); !reflect.DeepEqual(got, want) {
 		t.Errorf("pairs with -r:\n got %+v\nwant %+v", got, want)
 	}
@@ -1134,6 +1136,23 @@ role_arn = arn:aws:iam::666666666666:role/Admin
 source_profile = loop
 `
 
+func TestTokenKeyFollowsTheCredentialChain(t *testing.T) {
+	a := newTestApp(t, nil, filters{})
+	a.files = loadFiles(t, chainConfig, fleetCredentials)
+	// A role assumed from an SSO profile renews the same token as that profile.
+	for profile, want := range map[string]string{
+		"acme-prod": "acme-sso", "acme-admin": "acme-sso", "acme-admin-2": "acme-sso",
+		"acme-billing": "", "billing-admin": "", "vault": "", "vault-admin": "", "loop": "", "unknown": "",
+	} {
+		if got := a.tokenKey(profile); got != want {
+			t.Errorf("tokenKey(%q) = %q, want %q", profile, got, want)
+		}
+	}
+	if p := a.pairOf(instance("admin-app", "i-22", "acme-admin", "eu-west-1", "running", "")); p.Token != "acme-sso" {
+		t.Errorf("pairOf: %+v", p)
+	}
+}
+
 func TestCredentialChains(t *testing.T) {
 	a := newTestApp(t, nil, filters{})
 	a.files = loadFiles(t, chainConfig, fleetCredentials)
@@ -1189,7 +1208,7 @@ func TestAWSConfigOffersLoginOnlyForSSO(t *testing.T) {
 	// returned and nothing is offered.
 	in := instance("vault-app", "i-21", "vault", "eu-west-1", "running", "")
 	var err error
-	out := capture(t, &os.Stderr, func() { _, err = a.awsConfig(context.Background(), in) })
+	out := capture(t, &os.Stderr, func() { _, err = a.awsConfig(context.Background(), in.Profile, in.Region) })
 	if err == nil || !strings.HasPrefix(err.Error(), "credentials for profile vault: ") || !strings.Contains(err.Error(), "credential_process") {
 		t.Errorf("error %v", err)
 	}
@@ -1199,7 +1218,7 @@ func TestAWSConfigOffersLoginOnlyForSSO(t *testing.T) {
 
 	// An assumed role on an SSO profile gets the offer, for the right portal.
 	in = instance("admin-app", "i-22", "acme-admin", "eu-west-1", "running", "")
-	out = capture(t, &os.Stderr, func() { _, err = a.awsConfig(context.Background(), in) })
+	out = capture(t, &os.Stderr, func() { _, err = a.awsConfig(context.Background(), in.Profile, in.Region) })
 	if !strings.Contains(out, "SSO token expired for acme-sso. Sign in again now?") || err == nil || !strings.Contains(err.Error(), "aws CLI not found") {
 		t.Errorf("assumed role on SSO: %v\n%s", err, out)
 	}
@@ -1283,7 +1302,7 @@ func TestAWSConfigLoginInvalidatesChainedProfiles(t *testing.T) {
 	a.files = loadFiles(t, chainConfig, fleetCredentials)
 	in := instance("admin-app", "i-22", "acme-admin-2", "eu-west-1", "running", "")
 	var err error
-	out := capture(t, &os.Stderr, func() { _, err = a.awsConfig(context.Background(), in) })
+	out := capture(t, &os.Stderr, func() { _, err = a.awsConfig(context.Background(), in.Profile, in.Region) })
 	// The fake sign-in leaves no token behind: the credentials still fail, after the
 	// cache was invalidated.
 	if !strings.Contains(out, "Sign in again now?") || err == nil || !strings.Contains(err.Error(), "still no credentials for acme-admin-2") {
@@ -1299,7 +1318,7 @@ func TestAWSConfigWithoutTerminalNeverSignsIn(t *testing.T) {
 	a := newTestApp(t, nil, filters{})
 	in := instance("acme-p-tools", "i-01", "acme-prod", "eu-west-1", "running", "prod")
 	var err error
-	out := capture(t, &os.Stderr, func() { _, err = a.awsConfig(context.Background(), in) })
+	out := capture(t, &os.Stderr, func() { _, err = a.awsConfig(context.Background(), in.Profile, in.Region) })
 	if err == nil || err.Error() != "SSO token expired for acme-sso: hop login acme-sso" || out != "" {
 		t.Errorf("%v\n%q", err, out)
 	}
@@ -1450,7 +1469,7 @@ func TestAWSConfigRefusesMFAProfiles(t *testing.T) {
 	a := newTestApp(t, nil, filters{})
 	a.files = loadFiles(t, mfaConfig, fleetCredentials)
 	in := instance("billing-app", "i-31", "billing-mfa-2", "eu-west-1", "running", "")
-	_, err := a.awsConfig(context.Background(), in)
+	_, err := a.awsConfig(context.Background(), in.Profile, in.Region)
 	want := "profile billing-mfa-2 needs an MFA code (mfa_serial in billing-mfa), and hop does not prompt for MFA codes yet: use a profile without MFA, or one whose credentials come from aws-vault or another credential_process"
 	if err == nil || err.Error() != want {
 		t.Errorf("error %v", err)
@@ -1510,7 +1529,7 @@ func TestAWSConfigCanceledAtThePrompt(t *testing.T) {
 		io.Copy(io.Discard, r)
 		seen <- got.String()
 	}()
-	_, err = a.awsConfig(ctx, in)
+	_, err = a.awsConfig(ctx, in.Profile, in.Region)
 	os.Stderr = old
 	w.Close()
 	out := <-seen

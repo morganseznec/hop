@@ -385,8 +385,25 @@ footer a:hover { color: var(--text); }
         <article class="card c-4 reveal">
           <div class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="4 17 10 11 4 5"/><line x1="12" y1="19" x2="20" y2="19"/></svg></div>
           <h3>More than shells</h3>
-          <p>ssh, scp and rsync by instance name, a command with its exit code, port forwarding (also to a database behind the instance), a small file copied with a SHA-256 check.</p>
+          <p>ssh, scp and rsync by instance name, a command with its exit code, port forwarding (also to a database behind the instance), files copied both ways with a SHA-256 check.</p>
           <div class="chips"><span class="chip">ssh ec2-user@tools.hop</span><span class="chip">hop run tools uptime</span><span class="chip">hop tunnel db 5432 --host db.internal</span><span class="chip">hop push ./app.conf tools /etc/app.conf</span><span class="chip">hop pull tools /var/log/app.log</span></div>
+        </article>
+        <article class="card c-4 reveal">
+          <div class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><ellipse cx="12" cy="6" rx="8" ry="3"/><path d="M4 6l2 13c.3 1.2 2.8 2 6 2s5.7-.8 6-2l2-13"/></svg></div>
+          <h3>Every bucket, too</h3>
+          <p>The S3 buckets of all your profiles in one list, each with its region. Objects are listed with the options of <code>ls</code> and copied by bucket name, in parallel parts, and never replaced without a yes.</p>
+<div class="mini"><span class="t-p">$</span> hop s3 ls
+  NAME            PROFILE    REGION     ENV   CREATED
+  acme-p-backups  acme-prod  eu-west-1  prod  2024-03-11
+  acme-p-logs     acme-prod  us-east-1  prod  2023-09-02
+  acme-t-scratch  acme-test  eu-west-1  test  2026-05-20
+<span class="t-p">$</span> hop s3 pull logs/2026/app.log
+<span class="t-d">hop: 1.2 MB received, CRC64NVME matches on both sides</span></div>
+        </article>
+        <article class="card c-2 reveal">
+          <div class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg></div>
+          <h3>Large files, no detour</h3>
+          <p>Past the 64 KB that SSM carries, <code>hop push</code> goes through a relay bucket you name. The instance fetches a signed URL: it needs no S3 permission, and the file never sits in the command history.</p>
         </article>
         <article class="card c-3 reveal">
           <div class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></svg></div>
@@ -497,7 +514,7 @@ sudo pacman -U hop-&lt;version&gt;-1-x86_64.pkg.tar.zst</pre><button class="copy
       </div>
       <details><summary>Do my instances need SSH or a public IP?</summary><p>No. hop uses AWS Systems Manager Session Manager: the instance needs the SSM agent online, an instance role such as <code>AmazonSSMManagedInstanceCore</code>, and outbound HTTPS to the SSM endpoints (or VPC endpoints). No inbound port, no key. Need ssh, scp or rsync anyway? <code>hop init ssh</code> sends them through Session Manager too: <code>ssh ec2-user@tools.hop</code>.</p></details>
       <details><summary>Does hop store my AWS credentials?</summary><p>No. It reads profile names from <code>~/.aws</code> and lets the AWS SDK and the Session Manager plugin resolve credentials, like the AWS CLI. Error messages are scrubbed of keys and tokens before they are printed or cached.</p></details>
-      <details><summary>Which IAM permissions does it need?</summary><p>Read access to the EC2 and SSM inventory, <code>ssm:StartSession</code> for shells, tunnels, ssh and pull, and <code>ssm:SendCommand</code> for run and push. The <a href="https://github.com/morganseznec/hop#iam-permissions">README</a> has a ready-to-paste policy.</p></details>
+      <details><summary>Which IAM permissions does it need?</summary><p>Read access to the EC2 and SSM inventory, <code>ssm:StartSession</code> for shells, tunnels, ssh and pull, and <code>ssm:SendCommand</code> for run and push. <code>hop s3</code> adds S3 actions on the buckets you name, and nothing to delete with. The <a href="https://github.com/morganseznec/hop#iam-permissions">README</a> has a ready-to-paste policy.</p></details>
       <details><summary>How is it different from <code>aws ssm start-session</code>?</summary><p>That command needs the instance ID, the profile and the region. hop finds the instance across every profile and region for you, signs in once per SSO portal, checks session logging and never acts on a fuzzy match.</p></details>
       <details><summary>What about aws-gate, aws-ssm-tools or taws?</summary><p>Good tools, which work one profile and region at a time; hop searches every profile at once, even across separate AWS Organizations. Some do things hop does not, such as ECS sessions or ephemeral SSH keys: the <a href="https://github.com/morganseznec/hop#how-it-compares">README compares them</a>, strengths included.</p></details>
       <details><summary>What about GCP or Azure?</summary><p>GCP is experimental: with <code>gcp_projects</code> in hop's configuration, hop lists the Compute Engine instances of your projects and opens shells through IAP with <code>gcloud</code>, without the rest of what it does on AWS yet. Azure is not supported. Tell us what you need in <a href="https://github.com/morganseznec/hop/discussions/19">the GCP and Azure discussion</a>.</p></details>

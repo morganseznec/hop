@@ -15,6 +15,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"slices"
+	"strings"
 	"time"
 
 	"gopkg.in/yaml.v3"
@@ -45,6 +46,11 @@ type Config struct {
 	// every project gcloud's account can see). Setting it turns on the experimental GCP
 	// support.
 	GCPProjects []string `yaml:"gcp_projects,omitempty"`
+	// Buckets hop may leave a file in for the time an instance takes to fetch it, when
+	// the file is too large for SSM alone (hop push): by profile name or glob pattern.
+	// A value is a bucket, or a bucket and a key prefix ("acme-tools/hop-relay/"). hop
+	// never creates the bucket.
+	RelayBuckets map[string]string `yaml:"relay_buckets,omitempty"`
 }
 
 // Dir returns the folder of the configuration. Without a home directory (HOME unset)
@@ -104,6 +110,14 @@ func Load() (*Config, error) {
 			if _, err := path.Match(pat, ""); err != nil {
 				return nil, fmt.Errorf("%s: invalid pattern in %s: %q", p, list.key, pat)
 			}
+		}
+	}
+	for pat, b := range c.RelayBuckets {
+		if _, err := path.Match(pat, ""); err != nil {
+			return nil, fmt.Errorf("%s: invalid pattern in relay_buckets: %q", p, pat)
+		}
+		if name, _, _ := strings.Cut(strings.TrimPrefix(b, "s3://"), "/"); name == "" || strings.ContainsAny(b, " \t") {
+			return nil, fmt.Errorf("%s: relay_buckets: %q needs a bucket, written bucket or bucket/prefix, got %q", p, pat, b)
 		}
 	}
 	switch c.Transcript {
@@ -194,3 +208,22 @@ func (c *Config) Regions(profile, profileRegion, fileDefault string) []string {
 }
 
 func (c *Config) Label(profile string) string { return c.Labels[profile] }
+
+// RelayBucket returns the relay bucket of a profile, as written in relay_buckets
+// ("bucket" or "bucket/prefix"), or "" when there is none. The profile's own name wins;
+// otherwise the longest pattern that matches it does, the most specific one.
+func (c *Config) RelayBucket(profile string) string {
+	if b, ok := c.RelayBuckets[profile]; ok {
+		return b
+	}
+	best := ""
+	for pat := range c.RelayBuckets {
+		if ok, _ := path.Match(pat, profile); !ok {
+			continue
+		}
+		if len(pat) > len(best) || (len(pat) == len(best) && pat < best) {
+			best = pat
+		}
+	}
+	return c.RelayBuckets[best]
+}

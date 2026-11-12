@@ -40,6 +40,8 @@ type app struct {
 	// fetched holds the profile/region pairs queried during this call: they are never
 	// queried twice.
 	fetched map[string]bool
+	// fetchedBuckets holds the profiles whose buckets were listed during this call.
+	fetchedBuckets map[string]bool
 	// background is set for the detached refresh started by completion: it must not
 	// run credential_process helpers, which may prompt or open a window.
 	background bool
@@ -272,7 +274,7 @@ func (a *app) pairsIn(regions []string) []inventory.Pair {
 			rs = regions
 		}
 		for _, r := range rs {
-			out = append(out, inventory.Pair{Profile: p.Name, Region: r, PreferSSO: p.PreferSSO()})
+			out = append(out, inventory.Pair{Profile: p.Name, Region: r, PreferSSO: p.PreferSSO(), Token: a.tokenKey(p.Name)})
 		}
 	}
 	if a.gcpInScope(regions) {
@@ -295,7 +297,7 @@ func (a *app) keys() []string {
 }
 
 func (a *app) pairOf(in inventory.Instance) inventory.Pair {
-	return inventory.Pair{Profile: in.Profile, Region: in.Region, PreferSSO: a.preferSSO(in.Profile)}
+	return inventory.Pair{Profile: in.Profile, Region: in.Region, PreferSSO: a.preferSSO(in.Profile), Token: a.tokenKey(in.Profile)}
 }
 
 // rootProfile follows source_profile from an assume-role profile to the profile that
@@ -318,6 +320,17 @@ func (a *app) ssoPortal(profile string) (awsconf.Portal, bool) {
 		return awsconf.Portal{}, false
 	}
 	return a.files.PortalOf(p.Name)
+}
+
+// tokenKey identifies the SSO token a profile signs in with, directly or through the
+// source_profile of an assumed role, or is empty for a profile that does not go through
+// a portal. Profiles with the same key are never left to renew the token at the same
+// time (see inventory.TokenGate).
+func (a *app) tokenKey(profile string) string {
+	if pt, ok := a.ssoPortal(profile); ok {
+		return pt.Key
+	}
+	return ""
 }
 
 // invalidatePortal forces the next refresh of every profile that signs in through the
@@ -513,14 +526,20 @@ func (a *app) target(in inventory.Instance) *inventory.Target {
 	return a.inv.Targets[inventory.TargetKey(in.Profile, in.Region)]
 }
 
+// problem is a profile, or a profile/region pair, that the last query could not reach.
+type problem struct {
+	profile string
+	// label is how the message names it: the profile, with the region when it is not
+	// the profile's main one.
+	label string
+	kind  inventory.ErrKind
+	err   string
+}
+
 // reportProblems summarizes unreachable profile/region pairs, grouped by cause, with
 // the command that fixes them, or the raw error when there is no fix to offer.
 func (a *app) reportProblems() {
-	sso := map[string][]string{} // portal -> profiles
-	var portals []string
-	other := map[inventory.ErrKind][]failure{}
-	var kinds []inventory.ErrKind
-	seen := map[string]bool{}
+	var problems []problem
 	gcpErr := ""
 	for _, k := range a.keys() {
 		t, ok := a.inv.Targets[k]
@@ -535,20 +554,37 @@ func (a *app) reportProblems() {
 		if t.Region != a.mainRegion(t.Profile) {
 			label += " (" + t.Region + ")"
 		}
-		if t.ErrKind == inventory.ErrSSOExpired {
-			if pt, ok := a.ssoPortal(t.Profile); ok {
+		problems = append(problems, problem{t.Profile, label, t.ErrKind, t.Err})
+	}
+	a.report(problems, "hop ls --refresh")
+	if gcpErr != "" {
+		a.reportGCP(gcpErr)
+	}
+}
+
+// report prints the problems grouped by cause. again is the command that queries once
+// more, for the hints that end with it.
+func (a *app) report(problems []problem, again string) {
+	sso := map[string][]string{} // portal -> profiles
+	var portals []string
+	other := map[inventory.ErrKind][]failure{}
+	var kinds []inventory.ErrKind
+	seen := map[string]bool{}
+	for _, p := range problems {
+		if p.kind == inventory.ErrSSOExpired {
+			if pt, ok := a.ssoPortal(p.profile); ok {
 				if !seen[pt.Label()] {
 					seen[pt.Label()] = true
 					portals = append(portals, pt.Label())
 				}
-				sso[pt.Label()] = append(sso[pt.Label()], label)
+				sso[pt.Label()] = append(sso[pt.Label()], p.label)
 				continue
 			}
 		}
-		if _, ok := other[t.ErrKind]; !ok {
-			kinds = append(kinds, t.ErrKind)
+		if _, ok := other[p.kind]; !ok {
+			kinds = append(kinds, p.kind)
 		}
-		other[t.ErrKind] = append(other[t.ErrKind], failure{label, shortError(t.Err)})
+		other[p.kind] = append(other[p.kind], failure{p.label, shortError(p.err)})
 	}
 	for _, pt := range portals {
 		warn("SSO token expired for %s: %s not queried", pt, strings.Join(sso[pt], ", "))
@@ -568,7 +604,7 @@ func (a *app) reportProblems() {
 			hint("use a profile without mfa_serial, or get the credentials from aws-vault or another credential_process")
 			continue
 		case inventory.ErrLoginExpired:
-			hint(`sign in again with "aws login --profile <profile>", then hop ls --refresh`)
+			hint(`sign in again with "aws login --profile <profile>", then %s`, again)
 			continue
 		case inventory.ErrThrottled:
 			hint("AWS is rate limiting these calls: retry in a minute")
@@ -586,11 +622,8 @@ func (a *app) reportProblems() {
 		case inventory.ErrDenied:
 			hint("the permissions hop needs: %s", iamDocs)
 		case inventory.ErrNetwork:
-			hint("check the network, VPN or proxy, then hop ls --refresh")
+			hint("check the network, VPN or proxy, then %s", again)
 		}
-	}
-	if gcpErr != "" {
-		a.reportGCP(gcpErr)
 	}
 }
 
@@ -620,8 +653,9 @@ func printCauses(fs []failure) {
 	}
 }
 
-// requestID is the part of SDK errors that only AWS support can use.
-var requestID = regexp.MustCompile(`https response error StatusCode: \d+, RequestID: [^,]*, `)
+// requestID is the part of SDK errors that only AWS support can use: the request ID,
+// and the host ID that S3 adds to it.
+var requestID = regexp.MustCompile(`https response error StatusCode: \d+, RequestID: [^,]*, (HostID: [^,]*, )?`)
 
 // shortError puts a raw error on one line, without the request ID, and cuts it to
 // what a terminal line can show.
@@ -869,7 +903,7 @@ func (a *app) reach(ctx context.Context, args []string, why purpose) (inventory.
 				return in, aws.Config{}, err
 			}
 		}
-		cfg, err := a.awsConfig(ctx, in)
+		cfg, err := a.awsConfig(ctx, in.Profile, in.Region)
 		if err != nil {
 			return in, cfg, err
 		}
@@ -1003,15 +1037,16 @@ func (a *app) touch(in inventory.Instance) {
 	}
 }
 
-// awsConfig loads the instance's profile and checks its credentials before handing over
-// to the plugin. On an expired SSO token, it offers to open the portal right away.
-func (a *app) awsConfig(ctx context.Context, in inventory.Instance) (aws.Config, error) {
+// awsConfig loads a profile in a region and checks its credentials before acting with
+// them: a session handed over to the plugin, a command, a transfer. On an expired SSO
+// token, it offers to open the portal right away.
+func (a *app) awsConfig(ctx context.Context, profile, region string) (aws.Config, error) {
 	// The SDK would refuse to load the profile without a way to ask for the code: say
 	// why instead.
-	if m := a.files.MFAProfile(in.Profile); m != nil {
-		return aws.Config{}, mfaError(in.Profile, m)
+	if m := a.files.MFAProfile(profile); m != nil {
+		return aws.Config{}, mfaError(profile, m)
 	}
-	cfg, err := inventory.AWSConfig(ctx, in.Profile, in.Region, a.preferSSO(in.Profile))
+	cfg, err := inventory.AWSConfig(ctx, profile, region, a.preferSSO(profile))
 	if err != nil {
 		return cfg, err
 	}
@@ -1021,9 +1056,9 @@ func (a *app) awsConfig(ctx context.Context, in inventory.Instance) (aws.Config,
 	}
 	// Only a profile that signs in through a portal can be fixed by signing in again.
 	// Classify reads error messages: for any other profile, the raw error says more.
-	pt, ok := a.ssoPortal(in.Profile)
+	pt, ok := a.ssoPortal(profile)
 	if !ok || inventory.Classify(err) != inventory.ErrSSOExpired {
-		return cfg, fmt.Errorf("credentials for profile %s: %w", in.Profile, inventory.RedactError(err))
+		return cfg, fmt.Errorf("credentials for profile %s: %w", profile, inventory.RedactError(err))
 	}
 	yes, err := confirm(ctx, fmt.Sprintf("SSO token expired for %s. Sign in again now?", pt.Label()), true)
 	if err != nil {
@@ -1039,12 +1074,12 @@ func (a *app) awsConfig(ctx context.Context, in inventory.Instance) (aws.Config,
 	if err := a.inv.Save(); err != nil {
 		warn("cache not saved: %v", err)
 	}
-	cfg, err = inventory.AWSConfig(ctx, in.Profile, in.Region, a.preferSSO(in.Profile))
+	cfg, err = inventory.AWSConfig(ctx, profile, region, a.preferSSO(profile))
 	if err != nil {
 		return cfg, err
 	}
 	if _, err := cfg.Credentials.Retrieve(ctx); err != nil {
-		return cfg, fmt.Errorf("still no credentials for %s: %w", in.Profile, err)
+		return cfg, fmt.Errorf("still no credentials for %s: %w", profile, err)
 	}
 	return cfg, nil
 }

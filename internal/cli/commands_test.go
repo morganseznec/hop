@@ -61,7 +61,7 @@ func TestCommandTree(t *testing.T) {
 			t.Error("__refresh must stay hidden")
 		}
 	}
-	for _, want := range []string{"ls", "run", "tunnel", "push", "pull", "login", "doctor", "scan", "init", "__refresh"} {
+	for _, want := range []string{"ls", "run", "tunnel", "push", "pull", "s3", "login", "doctor", "scan", "init", "__refresh"} {
 		if !slices.Contains(names, want) {
 			t.Errorf("command %s missing (have %v)", want, names)
 		}

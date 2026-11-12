@@ -9,12 +9,15 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/morganseznec/hop/internal/bucket"
 	"github.com/morganseznec/hop/internal/inventory"
 	"github.com/morganseznec/hop/internal/match"
 )
 
 func newLs(f *filters) *cobra.Command {
 	var all, asJSON bool
+	// The options of a listing of S3 objects, for hop ls s3://...
+	var s3 listOptions
 	cmd := &cobra.Command{
 		Use:   "ls [filter...]",
 		Short: "List instances across all accounts",
@@ -28,13 +31,27 @@ reason is printed on stderr.
 AGENT is the SSM agent: online, lost (with its last contact), inactive, none, or ?
 when it could not be read; a stopped instance (--all) shows its state there. LOGGING
 says whether the account logs sessions in that region: yes, NO, or ? when it could
-not be checked. Both show - for a GCP instance (experimental, see gcp_projects).`,
+not be checked. Both show - for a GCP instance (experimental, see gcp_projects).
+
+An argument that starts with s3:// lists S3 instead, like hop s3 ls and with its
+options (-l, -h, -R, -t, -S): the buckets of every account for s3://, the objects of
+a bucket for s3://acme-logs/2026/.`,
 		Example: `  hop ls
   hop ls shop               filter by words, like the search
   hop ls -e test --all      test instances, stopped ones included
-  hop ls --json | jq ...`,
+  hop ls --json | jq ...
+  hop ls -lh s3://acme-logs/   what a bucket holds (see hop s3 ls)`,
 		ValidArgsFunction: completeQuery(f),
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if len(args) > 0 && bucket.HasScheme(args[0]) {
+				s3.all, s3.json = all, asJSON
+				return runS3Ls(cmd, f, s3, args)
+			}
+			// -h is the help, as on every command: it only means "human-readable"
+			// next to -l.
+			if s3.helpAsked() {
+				return cmd.Help()
+			}
 			a, err := newApp(*f)
 			if err != nil {
 				return err
@@ -89,6 +106,7 @@ not be checked. Both show - for a GCP instance (experimental, see gcp_projects).
 	}
 	cmd.Flags().BoolVarP(&all, "all", "a", false, "include stopped instances")
 	cmd.Flags().BoolVar(&asJSON, "json", false, "JSON output")
+	s3.register(cmd, true)
 	return cmd
 }
 

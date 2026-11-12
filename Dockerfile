@@ -1,7 +1,7 @@
 # hop and session-manager-plugin on Alpine: non-root, no package manager, no setuid
 # binaries. Base images are pinned by digest; Dependabot proposes the updates.
 
-FROM --platform=$BUILDPLATFORM golang:1.27.3-alpine3.24@sha256:d200d2dd76b03a99b52651fd1325aff7dcd35422c35c01bac56571b0507f3deb AS hop
+FROM --platform=$BUILDPLATFORM golang:1.27.4-alpine3.24@sha256:0a5f7fe796599ff487605987432e7619ae45beeb2fba4c2ce0b907879932aebf AS hop
 ARG TARGETOS TARGETARCH VERSION=dev
 WORKDIR /src
 COPY go.mod go.sum ./
@@ -14,7 +14,7 @@ RUN CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH go build -trimpath \
 
 # The plugin is built from its tagged sources rather than taken from AWS's packages:
 # a static binary, the current Go toolchain, and a commit checked below.
-FROM --platform=$BUILDPLATFORM golang:1.27.3-alpine3.24@sha256:d200d2dd76b03a99b52651fd1325aff7dcd35422c35c01bac56571b0507f3deb AS plugin
+FROM --platform=$BUILDPLATFORM golang:1.27.4-alpine3.24@sha256:0a5f7fe796599ff487605987432e7619ae45beeb2fba4c2ce0b907879932aebf AS plugin
 ARG TARGETOS TARGETARCH
 ARG PLUGIN_TAG=1.2.896.0
 ARG PLUGIN_COMMIT=6430675a44032a551be1937fb27a2d3fdfeb27f7
