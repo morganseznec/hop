@@ -98,6 +98,7 @@ them through IAP with gcloud.`,
   hop ls                      list the instances of every account
   hop run tools uptime        one-off command with its output
   hop pull tools /etc/motd    download a file
+  hop s3 ls                   list the S3 buckets of every account
   hop tunnel tools 3000       port forwarding
   ssh ec2-user@tools.hop      ssh, scp, rsync (set up with hop init ssh)
   hop login                   sign in again to expired SSO portals
@@ -120,7 +121,7 @@ them through IAP with gcloud.`,
 	_ = root.RegisterFlagCompletionFunc("env", cobra.FixedCompletions([]string{"prod", "test"}, cobra.ShellCompDirectiveNoFileComp))
 	_ = root.RegisterFlagCompletionFunc("region", completeRegions)
 
-	root.AddCommand(newLs(f), newRun(f), newTunnel(f), newPush(f), newPull(f), newLogin(f), newDoctor(f), newScan(f), newSSHProxy(f), newInit(), newRefresh(f))
+	root.AddCommand(newLs(f), newRun(f), newTunnel(f), newPush(f), newPull(f), newS3(f), newLogin(f), newDoctor(f), newScan(f), newSSHProxy(f), newInit(), newRefresh(f))
 	return root
 }
 

@@ -1189,7 +1189,7 @@ func TestAWSConfigOffersLoginOnlyForSSO(t *testing.T) {
 	// returned and nothing is offered.
 	in := instance("vault-app", "i-21", "vault", "eu-west-1", "running", "")
 	var err error
-	out := capture(t, &os.Stderr, func() { _, err = a.awsConfig(context.Background(), in) })
+	out := capture(t, &os.Stderr, func() { _, err = a.awsConfig(context.Background(), in.Profile, in.Region) })
 	if err == nil || !strings.HasPrefix(err.Error(), "credentials for profile vault: ") || !strings.Contains(err.Error(), "credential_process") {
 		t.Errorf("error %v", err)
 	}
@@ -1199,7 +1199,7 @@ func TestAWSConfigOffersLoginOnlyForSSO(t *testing.T) {
 
 	// An assumed role on an SSO profile gets the offer, for the right portal.
 	in = instance("admin-app", "i-22", "acme-admin", "eu-west-1", "running", "")
-	out = capture(t, &os.Stderr, func() { _, err = a.awsConfig(context.Background(), in) })
+	out = capture(t, &os.Stderr, func() { _, err = a.awsConfig(context.Background(), in.Profile, in.Region) })
 	if !strings.Contains(out, "SSO token expired for acme-sso. Sign in again now?") || err == nil || !strings.Contains(err.Error(), "aws CLI not found") {
 		t.Errorf("assumed role on SSO: %v\n%s", err, out)
 	}
@@ -1283,7 +1283,7 @@ func TestAWSConfigLoginInvalidatesChainedProfiles(t *testing.T) {
 	a.files = loadFiles(t, chainConfig, fleetCredentials)
 	in := instance("admin-app", "i-22", "acme-admin-2", "eu-west-1", "running", "")
 	var err error
-	out := capture(t, &os.Stderr, func() { _, err = a.awsConfig(context.Background(), in) })
+	out := capture(t, &os.Stderr, func() { _, err = a.awsConfig(context.Background(), in.Profile, in.Region) })
 	// The fake sign-in leaves no token behind: the credentials still fail, after the
 	// cache was invalidated.
 	if !strings.Contains(out, "Sign in again now?") || err == nil || !strings.Contains(err.Error(), "still no credentials for acme-admin-2") {
@@ -1299,7 +1299,7 @@ func TestAWSConfigWithoutTerminalNeverSignsIn(t *testing.T) {
 	a := newTestApp(t, nil, filters{})
 	in := instance("acme-p-tools", "i-01", "acme-prod", "eu-west-1", "running", "prod")
 	var err error
-	out := capture(t, &os.Stderr, func() { _, err = a.awsConfig(context.Background(), in) })
+	out := capture(t, &os.Stderr, func() { _, err = a.awsConfig(context.Background(), in.Profile, in.Region) })
 	if err == nil || err.Error() != "SSO token expired for acme-sso: hop login acme-sso" || out != "" {
 		t.Errorf("%v\n%q", err, out)
 	}
@@ -1450,7 +1450,7 @@ func TestAWSConfigRefusesMFAProfiles(t *testing.T) {
 	a := newTestApp(t, nil, filters{})
 	a.files = loadFiles(t, mfaConfig, fleetCredentials)
 	in := instance("billing-app", "i-31", "billing-mfa-2", "eu-west-1", "running", "")
-	_, err := a.awsConfig(context.Background(), in)
+	_, err := a.awsConfig(context.Background(), in.Profile, in.Region)
 	want := "profile billing-mfa-2 needs an MFA code (mfa_serial in billing-mfa), and hop does not prompt for MFA codes yet: use a profile without MFA, or one whose credentials come from aws-vault or another credential_process"
 	if err == nil || err.Error() != want {
 		t.Errorf("error %v", err)
@@ -1510,7 +1510,7 @@ func TestAWSConfigCanceledAtThePrompt(t *testing.T) {
 		io.Copy(io.Discard, r)
 		seen <- got.String()
 	}()
-	_, err = a.awsConfig(ctx, in)
+	_, err = a.awsConfig(ctx, in.Profile, in.Region)
 	os.Stderr = old
 	w.Close()
 	out := <-seen

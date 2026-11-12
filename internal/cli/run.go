@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"net"
@@ -11,8 +12,10 @@ import (
 	"strings"
 	"time"
 
+	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/spf13/cobra"
 
+	"github.com/morganseznec/hop/internal/bucket"
 	"github.com/morganseznec/hop/internal/inventory"
 	"github.com/morganseznec/hop/internal/session"
 )
@@ -80,23 +83,45 @@ stops waiting is canceled; one already running goes on.`,
 	return cmd
 }
 
-var pushShort = fmt.Sprintf("Upload a file of up to %d KB and verify its SHA-256 (replaces scp)", session.PushLimit/1000)
+const pushShort = "Upload a file and verify its SHA-256 (replaces scp)"
 
 func newPush(f *filters) *cobra.Command {
-	return &cobra.Command{
+	var force, relay bool
+	cmd := &cobra.Command{
 		Use:   "push <local-file> <instance> <remote-path>",
 		Short: pushShort,
-		Long: pushShort + `.
+		Long: pushShort + fmt.Sprintf(`.
 
-The file goes through SSM Run Command (AWS-RunShellScript) and is written as root to
-an absolute path on the instance. An existing file keeps its owner and mode; a new
-one belongs to root. The content stays in the SSM command history of the account for
-about 30 days, base64-encoded: do not push secrets this way. CloudTrail records the
-call without the content. Linux and macOS instances only; for larger files, go
-through S3.`,
+The file is written as root to an absolute path on the instance, by a command sent
+through SSM Run Command (AWS-RunShellScript). An existing file keeps its owner and
+mode; a new one belongs to root. Linux and macOS instances only.
+
+Up to %d KB, the file travels in the command itself. Its content then stays in the
+SSM command history of the account for about 30 days, base64-encoded: do not push
+secrets this way. CloudTrail records the call without the content.
+
+A larger file, or any file with --relay, goes through a relay bucket: hop uploads it
+under a random key, the instance downloads it with a URL signed for that one object,
+and hop deletes the object once the SHA-256 matches. The bucket must exist and be
+named under relay_buckets in hop's configuration: hop never creates one. Your role
+needs s3:PutObject, s3:GetObject, s3:DeleteObject and s3:AbortMultipartUpload on it;
+the instance needs no S3 permission, only curl or wget, a way to reach S3, and room
+for the file twice while it is copied. The SSM command history then keeps the URL,
+expired, and not the file.
+
+With s3://bucket/key in place of the instance and the path, the file goes to S3 and
+stays there: see hop s3 push.`, session.PushLimit/1000),
 		Example: `  hop push ./app.conf tools /etc/app/app.conf
-  hop push -p acme-prod ./motd web /etc/motd`,
-		Args: cobra.ExactArgs(3),
+  hop push -p acme-prod ./motd web /etc/motd
+  hop push ./release.tar.gz web /opt/app/release.tar.gz   through the relay bucket
+  hop push --relay ./api.key tools /etc/app/api.key       a small file, the same way
+  hop push ./dump.sql.gz s3://acme-backups/db/            to a bucket (see hop s3 push)`,
+		Args: func(cmd *cobra.Command, args []string) error {
+			if len(args) >= 2 && bucket.HasScheme(args[1]) {
+				return cobra.ExactArgs(2)(cmd, args)
+			}
+			return cobra.ExactArgs(3)(cmd, args)
+		},
 		ValidArgsFunction: func(cmd *cobra.Command, args []string, toComplete string) ([]string, cobra.ShellCompDirective) {
 			switch len(args) {
 			case 0:
@@ -107,16 +132,34 @@ through S3.`,
 			return nil, cobra.ShellCompDirectiveNoFileComp
 		},
 		RunE: func(cmd *cobra.Command, args []string) error {
-			if st, err := os.Stat(args[0]); err != nil || st.IsDir() {
+			if bucket.HasScheme(args[1]) {
+				if relay {
+					return errors.New("--relay is for a push to an instance: an s3:// destination is the bucket itself")
+				}
+				return runS3Push(cmd, f, force, args)
+			}
+			if force {
+				return errors.New("--force is for an s3:// destination: a file pushed to an instance always replaces the one there")
+			}
+			st, err := os.Stat(args[0])
+			if err != nil || st.IsDir() {
 				return fmt.Errorf("file not found: %s", args[0])
 			}
-			// Before the picker, a question or a sign-in, which would all be for nothing.
-			if err := session.CheckPush(args[0], args[2]); err != nil {
+			if err := session.CheckRemote(args[2]); err != nil {
 				return err
 			}
 			a, err := newApp(*f)
 			if err != nil {
 				return err
+			}
+			// Before the picker, a question or a sign-in, which would all be for nothing:
+			// a file too large for SSM needs a relay bucket, and so does --relay.
+			viaRelay := relay || st.Size() > session.PushLimit
+			if viaRelay && len(a.cfg.RelayBuckets) == 0 {
+				if relay {
+					return fmt.Errorf("--relay needs a bucket: name one under relay_buckets in %s", configFile())
+				}
+				return session.CheckPush(args[0], args[2])
 			}
 			in, cfg, err := a.reach(cmd.Context(), args[1:2], forPush)
 			if err != nil {
@@ -124,6 +167,9 @@ through S3.`,
 			}
 			a.warnAgent(in)
 			a.touch(in)
+			if viaRelay {
+				return a.pushVia(cmd.Context(), cfg, in, args[0], args[2], st.Size())
+			}
 			info("%s -> %s:%s", args[0], in.Name, args[2])
 			out, err := session.Push(cmd.Context(), cfg, in.ID, args[0], args[2])
 			// The remote shell says why a copy failed (permission denied, no such
@@ -138,6 +184,65 @@ through S3.`,
 			return nil
 		},
 	}
+	cmd.Flags().BoolVar(&force, "force", false, "with s3://, replace an existing object without asking")
+	cmd.Flags().BoolVar(&relay, "relay", false, "go through the relay bucket whatever the size: the content stays out of the SSM history")
+	return cmd
+}
+
+// pushVia copies a file to an instance through the relay bucket of its profile (see
+// session.PushVia): the way for a file too large for SSM, or one whose content must
+// stay out of the SSM command history.
+func (a *app) pushVia(ctx context.Context, cfg aws.Config, in inventory.Instance, local, remote string, size int64) error {
+	spec := a.cfg.RelayBucket(in.Profile)
+	if spec == "" {
+		return fmt.Errorf("%s (%s) is too large for SSM alone (limit %d KB), and relay_buckets in %s names no bucket for the profile %s",
+			local, byteSize(size), session.PushLimit/1000, configFile(), in.Profile)
+	}
+	loc, err := bucket.Parse(spec)
+	if err != nil || loc.Bucket == "" {
+		return fmt.Errorf("relay_buckets in %s: %q is not a bucket", configFile(), spec)
+	}
+	if loc.Key != "" && !strings.HasSuffix(loc.Key, "/") {
+		loc.Key += "/"
+	}
+	// The bucket may live in another region than the instance, or in another account.
+	rctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	region, err := inventory.BucketRegion(rctx, cfg, loc.Bucket)
+	cancel()
+	switch {
+	case ctx.Err() != nil:
+		return ctx.Err()
+	case err != nil:
+		return fmt.Errorf("relay bucket %s (relay_buckets in %s): profile %s cannot find it: %s", loc.Bucket, configFile(), in.Profile, shortError(err.Error()))
+	}
+	relay := session.Relay{Config: cfg.Copy(), Bucket: loc.Bucket, Prefix: loc.Key}
+	if region != "" {
+		relay.Config.Region = region
+	}
+	info("%s -> %s:%s, %s through s3://%s", local, in.Name, remote, byteSize(size), loc.Bucket)
+	p := &progress{tty: stderrTTY}
+	res, err := session.PushVia(ctx, cfg, relay, in.ID, local, remote, p.update, func() {
+		p.clear()
+		info("uploaded: %s is fetching it (up to %s)", in.Name, session.RelayWait(size))
+	})
+	p.clear()
+	if res.Output != nil && res.Output.Stderr != "" {
+		fmt.Fprint(os.Stderr, res.Output.Stderr)
+	}
+	switch {
+	case res.LeftErr != nil:
+		warn("the temporary object %s could not be deleted (%s): delete it, or let a lifecycle rule of the bucket do it", res.Object, shortError(res.LeftErr.Error()))
+	case res.Left:
+		warn("the temporary object %s stays in the bucket, since %s may still be fetching it: delete it afterwards, or let a lifecycle rule of the bucket do it", res.Object, in.Name)
+	}
+	if err != nil {
+		if errors.Is(err, bucket.ErrDenied) {
+			hint("your role needs s3:PutObject, s3:GetObject, s3:DeleteObject and s3:AbortMultipartUpload on the relay bucket: %s", iamDocs)
+		}
+		return err
+	}
+	info("copied, SHA-256 matches on both sides")
+	return nil
 }
 
 const pullShort = "Download a file and verify its SHA-256 (replaces scp from the instance)"
@@ -161,11 +266,20 @@ you only; an existing one is replaced and keeps its mode.
 While it streams, the SSM agent keeps the output on the instance's disk, in base64:
 a third more than the file. CloudTrail records the StartSession call, and when the
 account logs sessions, the log may keep a copy of the file, base64-encoded. Linux
-and macOS instances only.`,
+and macOS instances only.
+
+With s3://bucket/key in place of the instance and the path, the object comes from S3
+instead: see hop s3 pull.`,
 		Example: `  hop pull tools /var/log/app.log                 to ./app.log
   hop pull tools /etc/nginx/nginx.conf conf/      to conf/nginx.conf
-  hop pull -p acme-prod db /var/backups/db.sql.gz /tmp/prod.sql.gz`,
-		Args: cobra.RangeArgs(2, 3),
+  hop pull -p acme-prod db /var/backups/db.sql.gz /tmp/prod.sql.gz
+  hop pull s3://acme-logs/2026/app.log            from a bucket (see hop s3 pull)`,
+		Args: func(cmd *cobra.Command, args []string) error {
+			if len(args) > 0 && bucket.HasScheme(args[0]) {
+				return cobra.RangeArgs(1, 2)(cmd, args)
+			}
+			return cobra.RangeArgs(2, 3)(cmd, args)
+		},
 		ValidArgsFunction: func(cmd *cobra.Command, args []string, toComplete string) ([]string, cobra.ShellCompDirective) {
 			switch len(args) {
 			case 0:
@@ -176,6 +290,9 @@ and macOS instances only.`,
 			return nil, cobra.ShellCompDirectiveDefault
 		},
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if bucket.HasScheme(args[0]) {
+				return runS3Pull(cmd, f, args)
+			}
 			remote, local := args[1], ""
 			if len(args) == 3 {
 				local = args[2]

@@ -124,12 +124,15 @@ func (t *Target) updated() time.Time {
 type Inventory struct {
 	Version int                `json:"version"`
 	Targets map[string]*Target `json:"targets"`
+	// Buckets holds the S3 buckets of each profile, by profile name. Only the S3
+	// commands fill it. An older hop ignores the key, and drops it when it saves.
+	Buckets map[string]*BucketList `json:"buckets,omitempty"`
 	// profiles, when set by Retain, are the only profiles whose pairs Save keeps.
 	profiles map[string]bool
 }
 
-// Retain makes Save drop the pairs of every other profile: those of a profile removed
-// from the AWS files, which nothing would ever refresh or show again.
+// Retain makes Save drop the pairs and the buckets of every other profile: those of a
+// profile removed from the AWS files, which nothing would ever refresh or show again.
 func (inv *Inventory) Retain(profiles []string) {
 	inv.profiles = map[string]bool{}
 	for _, p := range profiles {
@@ -220,6 +223,14 @@ func (inv *Inventory) Save() error {
 				inv.Targets[k] = t
 			}
 		}
+		for k, l := range disk.Buckets {
+			if mine := inv.Buckets[k]; l != nil && (mine == nil || l.updated().After(mine.updated())) {
+				if inv.Buckets == nil {
+					inv.Buckets = map[string]*BucketList{}
+				}
+				inv.Buckets[k] = l
+			}
+		}
 	}
 	// After the merge, which would otherwise bring back from disk the pairs of a
 	// profile removed since.
@@ -227,6 +238,11 @@ func (inv *Inventory) Save() error {
 		for k, t := range inv.Targets {
 			if t == nil || !inv.profiles[t.Profile] {
 				delete(inv.Targets, k)
+			}
+		}
+		for k, l := range inv.Buckets {
+			if l == nil || !inv.profiles[l.Profile] {
+				delete(inv.Buckets, k)
 			}
 		}
 	}
@@ -297,7 +313,7 @@ func keepAgents(t, old *Target) {
 	}
 }
 
-// Invalidate forces the next refresh of every pair of a profile.
+// Invalidate forces the next refresh of every pair of a profile, and of its buckets.
 func (inv *Inventory) Invalidate(profile string) {
 	now := time.Now()
 	for _, t := range inv.Targets {
@@ -306,6 +322,11 @@ func (inv *Inventory) Invalidate(profile string) {
 			t.FetchedAt = time.Time{}
 			t.InvalidatedAt = now
 		}
+	}
+	if l := inv.Buckets[profile]; l != nil {
+		l.ErrAt = time.Time{}
+		l.FetchedAt = time.Time{}
+		l.InvalidatedAt = now
 	}
 }
 

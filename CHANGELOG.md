@@ -6,6 +6,44 @@ All notable changes to hop are listed here. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- `hop s3 ls` lists the S3 buckets of every AWS profile, each with the region it lives
+  in, from one `ListBuckets` call per profile, cached like the instances. Words filter
+  the list, and `-p`, `-r` and `-e` narrow it. Listing instances never calls S3.
+- `hop s3 ls <bucket>/<prefix>` lists the objects of a bucket, grouped at the next `/`,
+  with the options of `ls`: `-l`, `-h`, `-a`, `-R`, `-t`, `-S` (they combine, as in
+  `-alh`), plus `--reverse` and `--json`. The bucket is found like an instance, among
+  the buckets listed: by its exact name or whole words of it, after a question
+  otherwise. After `s3://` the name is exact, which also reaches a bucket of another
+  account with `-p`; hop asks before it uploads to one.
+- `hop s3 pull <bucket>/<key> [local-path]` downloads an object, a large one as ranges
+  fetched in parallel, and compares its size and the checksum S3 holds for it.
+- `hop s3 push <local-file> <bucket>[/<key>]` uploads a file, as a multipart upload
+  from 16 MB on, aborted when it fails or is interrupted. It never replaces an object
+  without asking (`--force` for scripts), and compares the CRC32 on both sides.
+- `hop ls`, `hop pull` and `hop push` take an `s3://` place and then do the same:
+  `hop ls -lh s3://acme-logs/`, `hop pull s3://acme-logs/app.log`,
+  `hop push dump.sql s3://acme-backups/`.
+- `hop push` sends a file of more than 64 KB through a relay bucket, named under
+  `relay_buckets` in hop's configuration: hop uploads it under a random key, the
+  instance fetches it with a signed URL (it needs `curl` or `wget` and a way to reach
+  S3, but no S3 permission), the SHA-256 is compared before the destination is touched
+  and after, and the object is deleted. hop never creates the bucket, and without one
+  the 64 KB limit stays. `--relay` sends a small file the same way, which keeps its
+  content out of the SSM command history.
+- The IAM policy in the README has three more statements: `S3Buckets` and `S3Objects`,
+  to drop without `hop s3`, and `RelayBucket`, to drop without a relay bucket.
+
+### Changed
+
+- `s3` is now a command: to search an instance by that word first, write
+  `hop -- s3 gateway` or put the word elsewhere (`hop gateway s3`).
+- `hop ls -h` and `hop s3 ls -h` still show the help; next to `-l`, `-h` means sizes in
+  KB, MB and GB.
+- The message of `hop push` for a file over 64 KB names `relay_buckets` instead of
+  sending you to S3 by hand.
+
 ## [0.4.0] - 2026-11-07
 
 Adds `hop pull`, which downloads a file through Session Manager.

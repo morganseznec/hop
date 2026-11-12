@@ -40,6 +40,11 @@ type fakeAWS struct {
 	lookupDenied bool
 	// sessions are the StartSession requests.
 	sessions []map[string]any
+	// scripts are the commands of each SendCommand, whole.
+	scripts [][]string
+	// pushStdout, when set, is what a push script prints: it then succeeds, instead of
+	// failing on a permission.
+	pushStdout string
 }
 
 // inventoryCalls returns the calls made to list or look up instances, sorted: what
@@ -90,8 +95,14 @@ func (f *fakeAWS) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			params, _ := req["Parameters"].(map[string]any)
 			cmds, _ := params["commands"].([]any)
 			cmd, _ := cmds[0].(string)
+			var script []string
+			for _, c := range cmds {
+				line, _ := c.(string)
+				script = append(script, line)
+			}
 			f.mu.Lock()
 			f.commands = append(f.commands, cmd)
+			f.scripts = append(f.scripts, script)
 			f.mu.Unlock()
 			io.WriteString(w, `{"Command":{"CommandId":"`+url.QueryEscape(cmd)+`"}}`)
 		case "StartSession":
@@ -107,6 +118,11 @@ func (f *fakeAWS) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 				out = map[string]any{"Status": "Failed", "ResponseCode": 3, "StandardErrorContent": "failed\n"}
 			case "set -e": // a push script
 				out = map[string]any{"Status": "Failed", "ResponseCode": 1, "StandardErrorContent": "sh: /root/app.conf: Permission denied\n"}
+				f.mu.Lock()
+				if f.pushStdout != "" {
+					out = map[string]any{"Status": "Success", "ResponseCode": 0, "StandardOutputContent": f.pushStdout + "\n"}
+				}
+				f.mu.Unlock()
 			}
 			b, _ := json.Marshal(out)
 			w.Write(b)
@@ -520,7 +536,7 @@ func TestPushChecksBeforeResolving(t *testing.T) {
 	}{
 		// "nowhere" matches no instance: resolving it would fail differently, after a
 		// refresh.
-		{[]string{"push", big, "nowhere", "/opt/acme/big.bin"}, big + ": 64001 bytes, too large for this method (limit 64000)"},
+		{[]string{"push", big, "nowhere", "/opt/acme/big.bin"}, big + ": 64001 bytes, too large for SSM alone (limit 64000)"},
 		{[]string{"push", small, "nowhere", "opt/acme/app.conf"}, "remote path must be absolute"},
 	}
 	for _, c := range cases {
@@ -534,8 +550,9 @@ func TestPushChecksBeforeResolving(t *testing.T) {
 	if len(fake.calls) != 0 {
 		t.Errorf("AWS called before the checks: %q", fake.calls)
 	}
-	if short := newPush(&filters{}).Short; !strings.Contains(short, "64 KB") {
-		t.Errorf("help %q", short)
+	// The help must say where SSM alone stops.
+	if long := newPush(&filters{}).Long; !strings.Contains(long, "Up to 64 KB, the file travels in the command itself") {
+		t.Errorf("help %q", long)
 	}
 }
 

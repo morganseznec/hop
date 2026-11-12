@@ -11,13 +11,14 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
+
+	"github.com/morganseznec/hop/internal/atomicfile"
 )
 
 // PullDocument is the Session Manager document Pull goes through. It runs one command
@@ -60,16 +61,11 @@ func Pull(ctx context.Context, cfg aws.Config, req Request, remote, local string
 	if err != nil {
 		return 0, err
 	}
-	tmp, err := os.CreateTemp(filepath.Dir(local), ".hop-pull-*")
+	tmp, err := atomicfile.Create(local, ".hop-pull-*")
 	if err != nil {
 		return 0, err
 	}
-	defer func() {
-		if tmp != nil {
-			tmp.Close()
-			os.Remove(tmp.Name())
-		}
-	}()
+	defer tmp.Discard()
 
 	req.Document = PullDocument
 	// The agent splits the command into words like a shell would, then runs it without
@@ -148,19 +144,7 @@ func Pull(ctx context.Context, cfg aws.Config, req Request, remote, local string
 	if got := hex.EncodeToString(h.Sum(nil)); got != sum {
 		return n, fmt.Errorf("checksum mismatch after download: local %s, remote %s", got, sum)
 	}
-	if st, err := os.Stat(local); err == nil {
-		if err := tmp.Chmod(st.Mode().Perm()); err != nil {
-			return n, err
-		}
-	}
-	if err := tmp.Close(); err != nil {
-		return n, err
-	}
-	if err := os.Rename(tmp.Name(), local); err != nil {
-		return n, err
-	}
-	tmp = nil
-	return n, nil
+	return n, tmp.Commit()
 }
 
 // pullScript returns the shell script that sends path, between lines that start with

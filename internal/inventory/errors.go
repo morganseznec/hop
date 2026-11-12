@@ -114,7 +114,9 @@ func classifyCode(code, service string) ErrKind {
 		if service == "SSO OIDC" {
 			return ErrSSOExpired
 		}
-	case "AuthFailure", "InvalidClientTokenId", "SignatureDoesNotMatch", "UnrecognizedClientException", "ExpiredToken", "RequestExpired":
+	case "AuthFailure", "InvalidClientTokenId", "InvalidAccessKeyId", "SignatureDoesNotMatch", "UnrecognizedClientException", "ExpiredToken", "RequestExpired":
+		// InvalidAccessKeyId is what S3 answers where the other services say
+		// InvalidClientTokenId.
 		return ErrBadKeys
 	case "UnauthorizedOperation", "ForbiddenException":
 		// ForbiddenException: the SSO portal no longer grants this role (permission
