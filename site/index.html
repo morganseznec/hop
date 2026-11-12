@@ -391,7 +391,7 @@ footer a:hover { color: var(--text); }
         <article class="card c-4 reveal">
           <div class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><ellipse cx="12" cy="6" rx="8" ry="3"/><path d="M4 6l2 13c.3 1.2 2.8 2 6 2s5.7-.8 6-2l2-13"/></svg></div>
           <h3>Every bucket, too</h3>
-          <p>The S3 buckets of all your profiles in one list, each with its region. Objects are listed with the options of <code>ls</code> and copied by bucket name, in parallel parts, and never replaced without a yes.</p>
+          <p>The S3 buckets of all your profiles in one list, each with its region. <code>hop s3</code> opens a picker over them: choose one, walk its prefixes, download an object. Or script it: objects are listed with the options of <code>ls</code> and copied by bucket name, in parallel parts, and never replaced without a yes.</p>
 <div class="mini"><span class="t-p">$</span> hop s3 ls
   NAME            PROFILE    REGION     ENV   CREATED
   acme-p-backups  acme-prod  eu-west-1  prod  2024-03-11

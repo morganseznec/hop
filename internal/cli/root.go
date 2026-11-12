@@ -98,6 +98,7 @@ them through IAP with gcloud.`,
   hop ls                      list the instances of every account
   hop run tools uptime        one-off command with its output
   hop pull tools /etc/motd    download a file
+  hop s3                      pick an S3 bucket, browse it, download an object
   hop s3 ls                   list the S3 buckets of every account
   hop tunnel tools 3000       port forwarding
   ssh ec2-user@tools.hop      ssh, scp, rsync (set up with hop init ssh)

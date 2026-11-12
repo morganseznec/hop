@@ -6,6 +6,18 @@ All notable changes to hop are listed here. The format follows
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-11-12
+
+`hop s3` on its own opens a picker over the S3 buckets, and walks the one you choose.
+
+### Added
+
+- `hop s3` on its own, in a terminal, opens a picker over the S3 buckets of every
+  profile, as `hop` does over instances. Inside a bucket, the same picker shows its
+  keys one level at a time: Enter on a prefix goes down, `..` goes back up, and Enter
+  on an object downloads it to the current directory, after a question. Without a
+  terminal, `hop s3` still prints its help.
+
 ## [0.5.0] - 2026-11-12
 
 Adds `hop s3`, for the S3 buckets of every account, and lets `hop push` carry files
@@ -329,7 +341,8 @@ First release.
   and Arch Linux packages, and a hardened Alpine image on GHCR. The Homebrew cask
   came with v0.1.1.
 
-[Unreleased]: https://github.com/morganseznec/hop/compare/v0.5.0...HEAD
+[Unreleased]: https://github.com/morganseznec/hop/compare/v0.6.0...HEAD
+[0.6.0]: https://github.com/morganseznec/hop/compare/v0.5.0...v0.6.0
 [0.5.0]: https://github.com/morganseznec/hop/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/morganseznec/hop/compare/v0.3.2...v0.4.0
 [0.3.2]: https://github.com/morganseznec/hop/compare/v0.3.1...v0.3.2

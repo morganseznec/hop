@@ -12,6 +12,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/aws"
 	fuzzyfinder "github.com/ktr0731/go-fuzzyfinder"
 	"github.com/mattn/go-runewidth"
+	"golang.org/x/term"
 
 	"github.com/morganseznec/hop/internal/bucket"
 	"github.com/morganseznec/hop/internal/inventory"
@@ -277,7 +278,7 @@ func (a *app) resolveBucket(ctx context.Context, n bucketName, use bucketUse) (i
 	if res.Fuzzy {
 		header = fmt.Sprintf("no bucket is named %q, close matches", name)
 	}
-	return a.pickBucket(found, header)
+	return a.pickBucket(found, header+" · Enter to choose, Esc to cancel")
 }
 
 // filteredOut explains a name that a listed bucket carries, when -r or -e leaves that
@@ -383,6 +384,12 @@ func (a *app) reachBucket(ctx context.Context, name bucketName, use bucketUse) (
 	if err != nil {
 		return b, aws.Config{}, err
 	}
+	return a.openBucket(ctx, b)
+}
+
+// openBucket returns a bucket with the credentials of its profile, set to the region
+// the bucket lives in. A region the list did not give is asked to S3.
+func (a *app) openBucket(ctx context.Context, b inventory.Bucket) (inventory.Bucket, aws.Config, error) {
 	region := b.Region
 	if region == "" {
 		region = a.mainRegion(b.Profile)
@@ -419,24 +426,46 @@ func regionOr(region string) string {
 // pickBucket opens the fuzzy picker over buckets: name, profile, region and
 // environment on each line, all of them searchable.
 func (a *app) pickBucket(items []inventory.Bucket, header string) (inventory.Bucket, error) {
-	wName, wProf := 0, 0
+	// Columns as wide as what they hold, no wider: a bucket name is long, and the
+	// picker cuts what goes past the terminal.
+	wName, wProf, wRegion := 0, 0, 0
 	for _, b := range items {
 		wName = max(wName, runewidth.StringWidth(b.Name))
 		wProf = max(wProf, runewidth.StringWidth(a.profileLabel(b.Profile)))
+		wRegion = max(wRegion, len(b.Region))
 	}
 	line := func(i int) string {
 		b := items[i]
-		return strings.TrimRight(fmt.Sprintf("%s  %s  %-14s %s",
-			runewidth.FillRight(b.Name, wName), runewidth.FillRight(a.profileLabel(b.Profile), wProf), b.Region, b.Env), " ")
+		return strings.TrimRight(fmt.Sprintf("%s  %s  %-*s  %s",
+			runewidth.FillRight(b.Name, wName), runewidth.FillRight(a.profileLabel(b.Profile), wProf), wRegion, b.Region, b.Env), " ")
 	}
-	i, err := fuzzyfinder.Find(items, line,
-		fuzzyfinder.WithPromptString("hop> "),
-		fuzzyfinder.WithHeader(header+" · Enter to choose, Esc to cancel"))
-	if errors.Is(err, fuzzyfinder.ErrAbort) {
-		return inventory.Bucket{}, errAborted
-	}
+	i, err := choose(len(items), line, header, 0)
 	if err != nil {
 		return inventory.Bucket{}, err
 	}
 	return items[i], nil
+}
+
+// pickerWidth is the number of columns of the terminal the picker draws on. Tests set
+// it.
+var pickerWidth = func() int {
+	if w, _, err := term.GetSize(int(os.Stderr.Fd())); err == nil && w > 0 {
+		return w
+	}
+	return 100
+}
+
+// choose opens the fuzzy picker over n lines and returns the index of the one chosen,
+// or errAborted on Esc. It has no side panel: with one, the picker gives the lines and
+// the header half the width of the terminal, too little for a bucket name next to its
+// profile, or for a key. The cursor starts on the line start. It is a variable so that
+// tests can choose without a terminal.
+var choose = func(n int, line func(i int) string, header string, start int) (int, error) {
+	i, err := fuzzyfinder.Find(make([]struct{}, n), line,
+		fuzzyfinder.WithPromptString("hop> "), fuzzyfinder.WithHeader(header),
+		fuzzyfinder.WithPreselected(func(i int) bool { return i == start }))
+	if errors.Is(err, fuzzyfinder.ErrAbort) {
+		return 0, errAborted
+	}
+	return i, err
 }
