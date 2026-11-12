@@ -14,6 +14,7 @@ import (
 	"time"
 	"unicode"
 
+	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/spf13/cobra"
 
 	"github.com/morganseznec/hop/internal/bucket"
@@ -37,14 +38,31 @@ reaches it (-p); hop asks before it uploads to such a bucket. It is also what te
 bucket from an instance on the other commands: hop ls s3://acme-logs/,
 hop pull s3://acme-logs/app.log, hop push dump.sql s3://acme-backups/.
 
+With no command, in a terminal, hop s3 opens a picker over those buckets, like hop
+does over instances: type to filter, Enter to open one. Inside, the same picker shows
+what the bucket holds: Enter on a prefix goes down, ".." goes back up, and Enter on
+an object downloads it to the current directory, after a question.
+
 hop never deletes an object, and asks before replacing one. CloudTrail records
 reads and writes of objects only where the account logs S3 data events.`,
-		Example: `  hop s3 ls                                   every bucket of every account
+		Example: `  hop s3                                      pick a bucket, walk it, download an object
+  hop s3 -p 'acme-*' -e prod                  the same, over some profiles
+  hop s3 ls                                   every bucket of every account
   hop s3 ls -lh acme-logs/2026/               what a prefix holds, with sizes and dates
   hop s3 pull acme-logs/2026/app.log          download to ./app.log
   hop s3 push ./dump.sql.gz acme-backups/db/  upload, in parts when the file is large`,
 		Args: cobra.NoArgs,
-		RunE: func(cmd *cobra.Command, args []string) error { return cmd.Help() },
+		RunE: func(cmd *cobra.Command, args []string) error {
+			// Without a terminal there is nobody to choose: the help, as before.
+			if !stdinTTY || !stderrTTY {
+				return cmd.Help()
+			}
+			a, err := newApp(*f)
+			if err != nil {
+				return err
+			}
+			return a.browse(cmd.Context())
+		},
 	}
 	cmd.AddCommand(newS3Ls(f), newS3Pull(f), newS3Push(f))
 	return cmd
@@ -508,6 +526,12 @@ func runS3Pull(cmd *cobra.Command, f *filters, args []string) error {
 		return err
 	}
 	loc.Bucket = b.Name
+	return a.download(ctx, cfg, b, loc, target)
+}
+
+// download fetches the object loc of the bucket b to the file target, and says what it
+// did and how it was checked.
+func (a *app) download(ctx context.Context, cfg aws.Config, b inventory.Bucket, loc bucket.Location, target string) error {
 	info("%s -> %s (%s, %s)", printable(loc.String()), target, b.Profile, b.Region)
 	p := &progress{tty: stderrTTY}
 	res, err := bucket.Download(ctx, cfg, loc, target, p.update)

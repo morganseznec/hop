@@ -267,6 +267,7 @@ typed (`hop -p acme-prod <Tab>`).
 | ssh, scp, rsync | `hop init ssh >> ~/.ssh/config` once, then `ssh ec2-user@tools.hop` |
 | Upload a file | `hop push ./app.conf tools /etc/app.conf`, `hop push ./release.tar.gz web /opt/app/release.tar.gz` |
 | Download a file | `hop pull tools /var/log/app.log`, `hop pull tools /etc/app.conf conf/` |
+| Pick an S3 bucket and browse it | `hop s3` |
 | S3 buckets and objects | `hop s3 ls`, `hop s3 ls -lh logs/2026/`, `hop s3 pull logs/2026/app.log`, `hop s3 push dump.sql backups/db/` |
 | SSO login | `hop login`, `hop login --status`, `hop login acme` |
 | Check your setup | `hop doctor` |
@@ -453,6 +454,12 @@ hop: s3://acme-p-logs/2026/app.log -> app.log (acme-prod, us-east-1)
 hop: 1.2 MB received, CRC64NVME matches on both sides
 ```
 
+- **Picker.** `hop s3` on its own, in a terminal, opens a picker over the buckets,
+  like `hop` does over instances: type to filter, Enter to open one. Inside, the same
+  picker shows what the bucket holds, one level at a time: Enter on a prefix goes
+  down, `..` goes back up (and from the top, back to the buckets), Enter on an object
+  downloads it to the current directory, after a question. Esc quits. `-p`, `-r` and
+  `-e` narrow the buckets shown. Without a terminal, `hop s3` prints its help.
 - **Buckets.** `hop s3 ls` takes one `ListBuckets` call per profile, cached like the
   instances, and shows each bucket in the region it lives in. Words filter the list
   (`hop s3 ls logs`), `-r` keeps the buckets of some regions, `-e` an environment,
