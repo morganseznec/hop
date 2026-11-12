@@ -207,7 +207,9 @@ func fetchScript(url, dst, want string) ([]string, error) {
 		url,
 		`HOP_URL`,
 		`else echo "no curl or wget on the instance" >&2; exit 127; fi`,
-		`got=$(` + hashOf(`"$d/data"`) + `)`,
+		// "$( (" with a space: dash, the sh of Debian and Ubuntu, reads "$((" as the
+		// start of an arithmetic expansion.
+		`got=$( ` + hashOf(`"$d/data"`) + ` )`,
 		`[ "$got" = ` + want + ` ] || { echo "the file downloaded is not the file sent (SHA-256 $got): $dst is unchanged" >&2; exit 3; }`,
 		`cat "$d/data" > "$dst"`,
 		hashOf(`"$dst"`),

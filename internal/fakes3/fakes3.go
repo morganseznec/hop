@@ -300,7 +300,7 @@ func readBody(r *http.Request) ([]byte, error) {
 		return io.ReadAll(r.Body)
 	}
 	br := bufio.NewReader(r.Body)
-	var out []byte
+	var out bytes.Buffer
 	for {
 		line, err := br.ReadString('\n')
 		if err != nil {
@@ -314,11 +314,11 @@ func readBody(r *http.Request) ([]byte, error) {
 		if n == 0 {
 			break
 		}
-		chunk := make([]byte, n)
-		if _, err := io.ReadFull(br, chunk); err != nil {
+		// Copied as it comes, rather than into a buffer of the size the request
+		// announces.
+		if _, err := io.CopyN(&out, br, n); err != nil {
 			return nil, err
 		}
-		out = append(out, chunk...)
 		if _, err := br.Discard(2); err != nil {
 			return nil, err
 		}
@@ -331,7 +331,7 @@ func readBody(r *http.Request) ([]byte, error) {
 			r.Header.Set(k, strings.TrimSpace(v))
 		}
 		if err != nil || line == "" {
-			return out, nil
+			return out.Bytes(), nil
 		}
 	}
 }

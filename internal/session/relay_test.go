@@ -300,6 +300,11 @@ func TestFetchScript(t *testing.T) {
 			t.Errorf("script lacks %q:\n%s", w, script)
 		}
 	}
+	// dash, the sh of Debian and Ubuntu, takes "$((" for arithmetic: a command
+	// substitution that starts with a subshell needs a space in between.
+	if strings.Contains(script, "$((") {
+		t.Errorf("the script has a \"$((\", a syntax error in dash:\n%s", script)
+	}
 	// The comparison comes before the copy.
 	if strings.Index(script, `[ "$got" =`) > strings.Index(script, `cat "$d/data" > "$dst"`) {
 		t.Error("the file is copied before it is compared")
