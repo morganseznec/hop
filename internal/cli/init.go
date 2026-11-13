@@ -26,6 +26,11 @@ func newInit() *cobra.Command {
     fish:  hop init fish | source           in ~/.config/fish/config.fish
     ssh:   hop init ssh >> ~/.ssh/config    then: ssh ec2-user@tools.hop
 
+In zsh, the integration also runs hop under noglob: patterns such as 'acme-*' or
+*.log reach hop as typed, instead of being expanded against the files of the current
+directory, or refused with "no matches found". hop reads them itself, the files of
+hop s3 push included.
+
 --alias NAME also makes NAME an alias for hop, with the same completion, and removes
 any shell function of that name that would shadow it. For people used to typing
 another name:
@@ -83,9 +88,13 @@ For PowerShell, see "hop completion powershell --help".`,
 
 func zshInit(w *bytes.Buffer, comp []byte, alias string) {
 	fmt.Fprintln(w, `# hop: eval "$(hop init zsh)" in ~/.zshrc`)
+	// hop reads patterns itself (profiles, buckets, keys, the files of a remote
+	// command): zsh would expand them against the files here first, and stop on
+	// "no matches found" when none fits. noglob hands them over as they are.
+	fmt.Fprintln(w, "alias -- hop='noglob hop'")
 	if alias != "" {
 		// A zsh function of the same name would shadow the alias: remove it.
-		fmt.Fprintf(w, "if (( $+functions[%s] )); then unfunction -- %s; fi\nalias -- %s=hop\n", alias, alias, alias)
+		fmt.Fprintf(w, "if (( $+functions[%s] )); then unfunction -- %s; fi\nalias -- %s='noglob hop'\n", alias, alias, alias)
 	}
 	fmt.Fprint(w, `# compdef only exists once compinit has run; do not break the shell otherwise.
 if (( $+functions[compdef] )); then
