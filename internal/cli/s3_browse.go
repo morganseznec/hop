@@ -18,12 +18,31 @@ import (
 // browse is hop s3 with no command, in a terminal: a picker over the buckets in scope,
 // as hop opens one over the instances, then over what the chosen bucket holds. It ends
 // with a download, or with Esc.
-func (a *app) browse(ctx context.Context) error {
+//
+// With arguments, it starts from what they find (see browseStart) rather than from the
+// whole list, which is where ".." at the top of a bucket leads back.
+func (a *app) browse(ctx context.Context, args []string) error {
 	if err := a.bucketScope(); err != nil {
 		return err
 	}
 	if err := a.ensureBuckets(ctx, a.f.refresh); err != nil {
 		return err
+	}
+	if len(args) > 0 {
+		chosen, prefix, err := a.browseStart(ctx, args)
+		if err != nil {
+			return err
+		}
+		if chosen.Name != "" {
+			b, cfg, err := a.openBucket(ctx, chosen)
+			if err != nil {
+				return err
+			}
+			done, err := a.browseBucket(ctx, cfg, b, prefix)
+			if err != nil || done {
+				return err
+			}
+		}
 	}
 	buckets := a.buckets()
 	if len(buckets) == 0 {
@@ -44,22 +63,79 @@ func (a *app) browse(ctx context.Context) error {
 		if err != nil {
 			return err
 		}
-		done, err := a.browseBucket(ctx, cfg, b)
+		done, err := a.browseBucket(ctx, cfg, b, "")
 		if err != nil || done {
 			return err
 		}
 	}
 }
 
+// browseStart finds where hop s3 <arguments> opens the picker: the bucket, and the
+// prefix inside it.
+//
+// A place ("logs/2026/", "s3://acme-logs/") names the bucket as everywhere else: by
+// words of its name, or exactly after s3://. Words alone search the buckets: one found
+// is the bucket, several are shown in the picker to choose from, and only them. A
+// bucket without a name is returned when there is nothing to start from but the list.
+func (a *app) browseStart(ctx context.Context, args []string) (b inventory.Bucket, prefix string, err error) {
+	if bucket.IsLocation(args[0]) {
+		loc, err := bucket.Parse(args[0])
+		switch {
+		case err != nil:
+			return b, "", err
+		case len(args) > 1:
+			return b, "", fmt.Errorf("the picker opens one place: to filter what %s holds, hop s3 ls %s", args[0], strings.Join(args, " "))
+		case bucket.HasMeta(loc.Key):
+			return b, "", fmt.Errorf("the picker walks prefixes, it does not take a pattern for keys: hop s3 ls '%s' lists what fits", args[0])
+		case loc.Bucket == "":
+			return b, "", nil
+		}
+		if !bucket.HasMeta(loc.Bucket) {
+			b, err = a.resolveBucket(ctx, nameOf(args[0], loc.Bucket), forBrowsing)
+			if loc.Key != "" && !strings.HasSuffix(loc.Key, "/") {
+				loc.Key += "/"
+			}
+			return b, loc.Key, err
+		}
+		// "s3://acme-p-*": a pattern for buckets, like the same word on its own.
+		args = []string{loc.Bucket}
+	}
+	query := strings.Join(args, " ")
+	found, err := a.matchBuckets(a.buckets(), args)
+	if err != nil {
+		return b, "", err
+	}
+	// A miss may come from a list that predates the bucket (see resolveBucket).
+	if len(found) == 0 {
+		if err := a.refreshBuckets(ctx, a.staleBuckets(freshWindow, false)); err != nil {
+			return b, "", err
+		}
+		if found, err = a.matchBuckets(a.buckets(), args); err != nil {
+			return b, "", err
+		}
+	}
+	switch len(found) {
+	case 0:
+		a.reportBucketProblems()
+		if err := a.filteredOut(query); err != nil {
+			return b, "", err
+		}
+		return b, "", fmt.Errorf("no bucket matches %q: hop s3 ls lists them all", query)
+	case 1:
+		return found[0], "", nil
+	}
+	b, err = a.pickBucket(found, fmt.Sprintf("%d buckets for %q · Enter opens, Esc quits", len(found), query))
+	return b, "", err
+}
+
 // upLine is the first line of every listing of the picker: the way back.
 const upLine = ".."
 
-// browseBucket walks a bucket in the picker, one level of keys at a time. Enter on a
+// browseBucket walks a bucket in the picker, from prefix, one level of keys at a time. Enter on a
 // prefix goes down, on ".." back up, and from the top of the bucket back to the list of
 // buckets (done is then false). Enter on an object offers to download it: a yes ends
 // the walk, a no returns to the listing.
-func (a *app) browseBucket(ctx context.Context, cfg aws.Config, b inventory.Bucket) (done bool, err error) {
-	prefix := ""
+func (a *app) browseBucket(ctx context.Context, cfg aws.Config, b inventory.Bucket, prefix string) (done bool, err error) {
 	for {
 		loc := bucket.Location{Bucket: b.Name, Key: prefix}
 		objs, err := bucket.List(ctx, cfg, loc, false, func(n int) {

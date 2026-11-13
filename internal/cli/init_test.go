@@ -46,12 +46,16 @@ func TestInitZsh(t *testing.T) {
 			if !strings.HasPrefix(out, "# hop: eval \"$(hop init zsh)\" in ~/.zshrc\n") {
 				t.Errorf("header missing:\n%.200s", out)
 			}
-			aliasLines := "if (( $+functions[" + c.alias + "] )); then unfunction -- " + c.alias + "; fi\nalias -- " + c.alias + "=hop\n"
+			// hop runs under noglob, so that zsh leaves patterns to it.
+			if !strings.Contains(out, "\nalias -- hop='noglob hop'\n") {
+				t.Errorf("hop is not run under noglob:\n%.400s", out)
+			}
+			aliasLines := "if (( $+functions[" + c.alias + "] )); then unfunction -- " + c.alias + "; fi\nalias -- " + c.alias + "='noglob hop'\n"
 			if c.alias != "" && !strings.Contains(out, aliasLines) {
 				t.Errorf("alias lines missing:\n%.400s", out)
 			}
-			if c.alias == "" && strings.Contains(out, "alias --") {
-				t.Errorf("alias defined without --alias:\n%.400s", out)
+			if c.alias == "" && strings.Count(out, "alias --") != 1 {
+				t.Errorf("another alias defined without --alias:\n%.400s", out)
 			}
 			// The completion is guarded: compdef only exists after compinit.
 			guard := "if (( $+functions[compdef] )); then\n"
@@ -154,8 +158,30 @@ func TestInitZshBehavior(t *testing.T) {
 	})
 	t.Run("the alias replaces a function of the same name", func(t *testing.T) {
 		out, err := zshRun(t, zsh, "ssm() { print function }; source '"+script+"'; whence -w ssm; alias ssm")
-		if err != nil || out != "ssm: alias\nssm=hop\n" {
+		if err != nil || out != "ssm: alias\nssm='noglob hop'\n" {
 			t.Errorf("%v: %q", err, out)
+		}
+	})
+	t.Run("patterns reach hop as typed", func(t *testing.T) {
+		// A stand-in for hop that prints its arguments, in a directory where no file
+		// matches: zsh alone stops on "no matches found" before running anything.
+		dir := t.TempDir()
+		stub := "hop() { print -r -- \"got: $*\" }; cd '" + dir + "'; "
+		out, err := zshRun(t, zsh, stub+"eval 'hop s3 ls acme-* *.log'")
+		if err == nil || !strings.Contains(out, "no matches found") {
+			t.Fatalf("zsh no longer refuses an unmatched pattern, the test proves nothing: %v %q", err, out)
+		}
+		for _, name := range []string{"hop", "ssm"} {
+			out, err = zshRun(t, zsh, stub+"source '"+script+"'; eval '"+name+" s3 ls acme-* *.log logs/2026/[ab]?.gz'")
+			if err != nil || out != "got: s3 ls acme-* *.log logs/2026/[ab]?.gz\n" {
+				t.Errorf("%s: %v: %q", name, err, out)
+			}
+		}
+		// A file here that fits the pattern is not put in its place either.
+		os.WriteFile(filepath.Join(dir, "app.log"), nil, 0o600)
+		out, err = zshRun(t, zsh, stub+"source '"+script+"'; eval 'hop s3 ls logs/ *.log'")
+		if err != nil || out != "got: s3 ls logs/ *.log\n" {
+			t.Errorf("with a matching file: %v: %q", err, out)
 		}
 	})
 	t.Run("with compinit, the completion is registered", func(t *testing.T) {

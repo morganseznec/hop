@@ -6,6 +6,37 @@ All notable changes to hop are listed here. The format follows
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-11-13
+
+Finds a bucket among a hundred, and a file in a bucket: `hop s3` and `hop s3 ls` take
+words and patterns to filter with.
+
+### Added
+
+- `hop s3 <words>` searches the buckets before opening the picker, as `hop` searches
+  instances: one bucket found opens at once, several show in the picker, and only
+  them. `hop s3 <bucket>/<prefix>` opens the picker at that place.
+- `hop s3 ls <bucket>/<prefix> <words>` filters what the place holds: plain words,
+  in any case, and patterns (`*`, `?`, `[abc]`). With `-R` it looks through every
+  object below, which is how to find a file in a bucket. A pattern can also end the
+  place: `hop s3 ls 'acme-logs/2026/*.log'`.
+- `hop s3 ls` takes patterns for bucket names too: `hop s3 ls 'acme-p-*' logs`.
+- `hop s3 pull` with a pattern in the key downloads every object of that prefix that
+  fits, into a directory: `hop s3 pull 'acme-logs/2026/11/*.gz' logs/`.
+- `hop s3 push` takes several files, or a pattern for them, to a destination that ends
+  with `/`: `hop s3 push ./logs/*.gz acme-backups/logs/`.
+
+### Changed
+
+- `hop init zsh` now runs hop under `noglob`, so that zsh hands patterns to hop as
+  typed instead of expanding them against the files of the current directory, or
+  stopping on `no matches found`. hop reads patterns itself, those of local files
+  included (`hop s3 push`, and `hop push` when a pattern names one file). Reload the
+  integration (a new shell) to get it.
+- `hop s3 ls <place> <more>` no longer answers "one place at a time": what follows the
+  place is a filter.
+- `hop s3 <word>` is a search, where it was an unknown command.
+
 ## [0.6.0] - 2026-11-12
 
 `hop s3` on its own opens a picker over the S3 buckets, and walks the one you choose.
@@ -341,7 +372,8 @@ First release.
   and Arch Linux packages, and a hardened Alpine image on GHCR. The Homebrew cask
   came with v0.1.1.
 
-[Unreleased]: https://github.com/morganseznec/hop/compare/v0.6.0...HEAD
+[Unreleased]: https://github.com/morganseznec/hop/compare/v0.7.0...HEAD
+[0.7.0]: https://github.com/morganseznec/hop/compare/v0.6.0...v0.7.0
 [0.6.0]: https://github.com/morganseznec/hop/compare/v0.5.0...v0.6.0
 [0.5.0]: https://github.com/morganseznec/hop/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/morganseznec/hop/compare/v0.3.2...v0.4.0

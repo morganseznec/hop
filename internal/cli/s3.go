@@ -23,9 +23,9 @@ import (
 
 func newS3(f *filters) *cobra.Command {
 	cmd := &cobra.Command{
-		Use:   "s3",
-		Short: "List S3 buckets across all accounts, download and upload objects",
-		Long: `List S3 buckets across all accounts, download and upload objects.
+		Use:   "s3 [bucket words... | bucket/prefix]",
+		Short: "Pick an S3 bucket across all accounts and browse it; list, download and upload objects",
+		Long: `Pick an S3 bucket across all accounts and browse it; list, download and upload objects.
 
 hop lists the buckets of every AWS profile on this machine, so a bucket is named
 without saying which account or region holds it: "acme-logs/2026/app.log". The bucket
@@ -43,25 +43,42 @@ does over instances: type to filter, Enter to open one. Inside, the same picker 
 what the bucket holds: Enter on a prefix goes down, ".." goes back up, and Enter on
 an object downloads it to the current directory, after a question.
 
+With words, hop s3 searches the buckets first, as hop searches instances: a single
+bucket found opens at once, several show in the picker, and only them. That is the
+quick way through an account with a hundred buckets: "hop s3 billing logs",
+"hop s3 'acme-p-*'". With a place, the picker opens there: "hop s3 logs/2026/".
+
+Patterns work wherever a name is searched: * for any run of characters, ? for one,
+[abc] for one of a set. In zsh, quote them, or load hop's integration
+(eval "$(hop init zsh)"), which keeps the shell from expanding them before hop.
+
 hop never deletes an object, and asks before replacing one. CloudTrail records
 reads and writes of objects only where the account logs S3 data events.`,
 		Example: `  hop s3                                      pick a bucket, walk it, download an object
-  hop s3 -p 'acme-*' -e prod                  the same, over some profiles
+  hop s3 billing logs                         straight to the bucket those words find
+  hop s3 logs/2026/                           the picker, opened at that prefix
+  hop s3 -p 'acme-*' -e prod                  the picker, over some profiles
   hop s3 ls                                   every bucket of every account
+  hop s3 ls -R logs/2026/ error '*.gz'        find objects by words and patterns
   hop s3 ls -lh acme-logs/2026/               what a prefix holds, with sizes and dates
   hop s3 pull acme-logs/2026/app.log          download to ./app.log
   hop s3 push ./dump.sql.gz acme-backups/db/  upload, in parts when the file is large`,
-		Args: cobra.NoArgs,
+		Args:              cobra.ArbitraryArgs,
+		ValidArgsFunction: completeBuckets(f, 0),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			// Without a terminal there is nobody to choose: the help, as before.
+			// Without a terminal there is nobody to choose: the help, or the command
+			// that lists instead.
 			if !stdinTTY || !stderrTTY {
-				return cmd.Help()
+				if len(args) == 0 {
+					return cmd.Help()
+				}
+				return fmt.Errorf("no terminal: hop s3 %s opens a picker (to list without one: hop s3 ls %s)", strings.Join(args, " "), strings.Join(args, " "))
 			}
 			a, err := newApp(*f)
 			if err != nil {
 				return err
 			}
-			return a.browse(cmd.Context())
+			return a.browse(cmd.Context(), args)
 		},
 	}
 	cmd.AddCommand(newS3Ls(f), newS3Pull(f), newS3Push(f))
@@ -75,6 +92,9 @@ var displayZone = time.Local
 // listOptions are the options of a listing, named after those of ls.
 type listOptions struct {
 	all, long, human, recursive, byTime, bySize, reverse, json bool
+	// filter keeps the objects that answer the pattern in the place listed, and the
+	// words typed after it. It is not an option of its own.
+	filter bucket.Filter
 }
 
 // register adds the options of ls to a command, hidden from its help when the command
@@ -103,7 +123,7 @@ func (o listOptions) helpAsked() bool { return o.human && !o.long }
 func newS3Ls(f *filters) *cobra.Command {
 	var o listOptions
 	cmd := &cobra.Command{
-		Use:   "ls [filter... | bucket/prefix]",
+		Use:   "ls [filter... | bucket/prefix [filter...]]",
 		Short: "List buckets across all accounts, or the objects of a bucket",
 		Long: `List buckets across all accounts, or the objects of a bucket.
 
@@ -120,14 +140,27 @@ is searched like an instance name: an exact name, or whole words of it ("logs/")
 used directly; a looser match asks first. After s3://, it is an exact name
 (s3://acme-logs/2026/), which also reaches a bucket of another account with -p.
 
+What comes after the place filters what it holds: a plain word must be part of the
+name, in any case, and a word with a wildcard (* ? [abc]) is a pattern for the name,
+or for its last part. A pattern may also end the place itself: "acme-logs/2026/*.log".
+At one level by default; with -R, among every object below, which is how to find a
+file in a bucket: hop s3 ls -R acme-logs/ error 2026-11. The same goes for buckets:
+hop s3 ls 'acme-p-*' logs.
+
 The options are those of ls, and combine (-alh): -l for the size, the date and the
 storage class, -h for sizes in KB, MB and GB, -a for the names that start with a dot,
 left out otherwise, -t and -S to sort. -h on its own shows this help. Reversing the
-order is --reverse, since -r is --region.`,
+order is --reverse, since -r is --region.
+
+zsh expands * itself, and stops on a pattern that matches no file here: quote it, or
+load hop's zsh integration (hop init zsh), which leaves patterns to hop.`,
 		Example: `  hop s3 ls                          every bucket of every account
   hop s3 ls logs                     filter the buckets by words
   hop s3 ls acme-logs/               the top of a bucket
+  hop s3 ls 'acme-p-*'               buckets by a pattern
   hop s3 ls -alh acme-logs/2026/     sizes, dates, names that start with a dot
+  hop s3 ls acme-logs/2026/ '*.gz'   what fits a pattern at that level
+  hop s3 ls -R acme-logs/ error 11   find objects below, by words
   hop s3 ls -R acme-logs/2026/ --json | jq ...`,
 		ValidArgsFunction: completeBuckets(f, 0),
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -149,15 +182,31 @@ func runS3Ls(cmd *cobra.Command, f *filters, o listOptions, args []string) error
 	var loc bucket.Location
 	var name bucketName
 	if len(args) > 0 && bucket.IsLocation(args[0]) {
-		if len(args) > 1 {
-			return fmt.Errorf("one place at a time: %s and %s", args[0], args[1])
-		}
 		var err error
 		if loc, err = bucket.Parse(args[0]); err != nil {
 			return err
 		}
-		name = nameOf(args[0], loc.Bucket)
-		args = nil
+		switch {
+		case bucket.HasMeta(loc.Bucket) && loc.Key != "":
+			return fmt.Errorf("a pattern in the bucket name lists buckets, not what one of them holds: hop s3 ls '%s'", loc.Bucket)
+		case bucket.HasMeta(loc.Bucket):
+			// "s3://acme-*": the buckets that fit, with the words that follow.
+			args, loc = append([]string{loc.Bucket}, args[1:]...), bucket.Location{}
+		case loc.Bucket != "":
+			// The place first, then what to look for in it: a pattern in the key
+			// itself ("2026/*.log"), words after it, or both.
+			var pattern string
+			loc.Key, pattern = bucket.SplitPattern(loc.Key)
+			if o.filter, err = bucket.NewFilter(pattern, args[1:]); err != nil {
+				return err
+			}
+			// A pattern that names several levels ("*/app.log") needs every object
+			// below to be read.
+			o.recursive = o.recursive || strings.Contains(pattern, "/")
+			name = nameOf(args[0], loc.Bucket)
+		default:
+			args = args[1:]
+		}
 	}
 	a, err := newApp(*f)
 	if err != nil {
@@ -180,8 +229,11 @@ func (a *app) listBuckets(cmd *cobra.Command, o listOptions, words []string) err
 	total := len(items)
 	if len(words) > 0 {
 		// The search ranks by relevance; the list keeps the per-account order.
+		found, err := a.matchBuckets(items, words)
+		if err != nil {
+			return err
+		}
 		keep := map[string]bool{}
-		_, found := a.searchBuckets(items, strings.Join(words, " "))
 		for _, b := range found {
 			keep[b.Name] = true
 		}
@@ -315,7 +367,11 @@ func (a *app) listObjects(cmd *cobra.Command, o listOptions, loc bucket.Location
 	} else {
 		printEntries(entries, o)
 	}
-	objectsFooter(entries, hidden, loc, b)
+	objectsFooter(entries, hidden, loc, b, o.filter)
+	// A search that finds nothing at this level may find below.
+	if len(entries) == 0 && !o.filter.Empty() && !o.recursive {
+		hint("-R looks in every object below %s", printable(loc.String()))
+	}
 	return nil
 }
 
@@ -332,6 +388,9 @@ func listing(objs []bucket.Object, prefix string, o listOptions) (entries []entr
 		if o.recursive {
 			e.name = obj.Key
 		} else if rel == "" {
+			continue
+		}
+		if !o.filter.Match(rel) {
 			continue
 		}
 		if !o.all && dotted(rel, o.recursive) {
@@ -427,7 +486,7 @@ func printEntries(entries []entry, o listOptions) {
 }
 
 // objectsFooter says on stderr what the listing holds, where, and what -a would add.
-func objectsFooter(entries []entry, hidden int, loc bucket.Location, b inventory.Bucket) {
+func objectsFooter(entries []entry, hidden int, loc bucket.Location, b inventory.Bucket, filter bucket.Filter) {
 	objects, prefixes, size := 0, 0, int64(0)
 	for _, e := range entries {
 		if e.Prefix {
@@ -450,7 +509,11 @@ func objectsFooter(entries []entry, hidden int, loc bucket.Location, b inventory
 	if objects > 0 {
 		parts = append(parts, byteSize(size))
 	}
-	msg := fmt.Sprintf("%s in %s (%s, %s)", strings.Join(parts, ", "), printable(loc.String()), b.Profile, b.Region)
+	what := strings.Join(parts, ", ")
+	if !filter.Empty() {
+		what += fmt.Sprintf(" matching %q", printable(filter.String()))
+	}
+	msg := fmt.Sprintf("%s in %s (%s, %s)", what, printable(loc.String()), b.Profile, b.Region)
 	if hidden > 0 {
 		msg += fmt.Sprintf("; %d not shown, starting with a dot: -a lists them", hidden)
 	}
@@ -461,7 +524,7 @@ const s3PullShort = "Download an object from a bucket and check it"
 
 func newS3Pull(f *filters) *cobra.Command {
 	return &cobra.Command{
-		Use:   "pull <bucket>/<key> [local-path]",
+		Use:   "pull <bucket>/<key|pattern> [local-path]",
 		Short: s3PullShort,
 		Long: s3PullShort + `.
 
@@ -478,9 +541,15 @@ and keeps its mode.
 The size is compared with what S3 announced, and the content with the checksum S3
 holds for the whole object, when it has one: hop says which, or that there was none
 (an object sent without a checksum, or in parts by a tool that kept only a checksum of
-its parts). An archived object (Glacier) must be restored first.`,
+its parts). An archived object (Glacier) must be restored first.
+
+A key with a wildcard (* ? [abc]) downloads every object of that prefix that fits it,
+each under its own name, into the current directory or the one given:
+hop s3 pull 'acme-logs/2026/11/*.gz' logs/. hop says how many and how much first, and
+asks when there are several.`,
 		Example: `  hop s3 pull acme-logs/2026/app.log                 to ./app.log
   hop s3 pull acme-logs/2026/app.log logs/           to logs/app.log
+  hop s3 pull 'acme-logs/2026/11/*.gz' logs/         every .gz of that prefix
   hop s3 pull -p acme-prod s3://acme-backups/db.sql.gz /tmp/prod.sql.gz`,
 		Args: cobra.RangeArgs(1, 2),
 		ValidArgsFunction: func(cmd *cobra.Command, args []string, toComplete string) ([]string, cobra.ShellCompDirective) {
@@ -504,12 +573,17 @@ func runS3Pull(cmd *cobra.Command, f *filters, args []string) error {
 		return err
 	case loc.Bucket == "":
 		return fmt.Errorf("no bucket in %q: expected bucket/key", args[0])
+	case bucket.HasMeta(loc.Bucket):
+		return fmt.Errorf("a pattern in the bucket name is for hop s3 ls: name the bucket, and put the pattern in the key (%s)", "bucket/2026/*.log")
 	case loc.Key == "" || strings.HasSuffix(loc.Key, "/"):
 		return fmt.Errorf("%s names a prefix, not an object: hop s3 ls %s lists what it holds", args[0], args[0])
 	}
 	local := ""
 	if len(args) == 2 {
 		local = args[1]
+	}
+	if bucket.HasMeta(loc.Key) {
+		return runS3PullMany(cmd, f, args[0], loc, local)
 	}
 	// Before the picker, a question or a sign-in, which would all be for nothing.
 	target, err := pullTarget(loc.Key, local)
@@ -555,14 +629,15 @@ const s3PushShort = "Upload a file to a bucket, in parts when it is large, and c
 func newS3Push(f *filters) *cobra.Command {
 	var force bool
 	cmd := &cobra.Command{
-		Use:   "push <local-file> <bucket>[/<key>]",
+		Use:   "push <local-file>... <bucket>[/<key>]",
 		Short: s3PushShort,
 		Long: s3PushShort + `.
 
 The destination is a bucket and a key; hop finds which profile and region hold the
 bucket, searched like an instance name, or taken as an exact name after s3://. A key
 that ends with "/", or no key at all, keeps the name of the file: "acme-backups/db/"
-receives db/dump.sql.gz. To a bucket of another account (s3://, with -p), hop asks
+receives db/dump.sql.gz. Several files, or a pattern (*.gz), go one after the other to
+a destination that ends with "/". To a bucket of another account (s3://, with -p), hop asks
 first, and refuses without a terminal: a mistyped name can be somebody else's bucket.
 
 hop never replaces an object without asking: when the key exists, it asks first, and
@@ -575,8 +650,9 @@ parts do not stay in the bucket. S3 verifies a CRC32 of each request and returns
 CRC32 of the whole object, which hop compares with the one of the file.`,
 		Example: `  hop s3 push ./dump.sql.gz acme-backups/db/             to db/dump.sql.gz
   hop s3 push ./app.conf acme-config/prod/app.conf
+  hop s3 push ./logs/*.gz acme-backups/logs/             several files, each under its name
   hop s3 push --force ./index.html s3://acme-site/index.html`,
-		Args: cobra.ExactArgs(2),
+		Args: cobra.MinimumNArgs(2),
 		ValidArgsFunction: func(cmd *cobra.Command, args []string, toComplete string) ([]string, cobra.ShellCompDirective) {
 			if len(args) == 1 {
 				return completeBuckets(f, 1)(cmd, args, toComplete)
@@ -591,37 +667,93 @@ CRC32 of the whole object, which hop compares with the one of the file.`,
 	return cmd
 }
 
-// runS3Push uploads the file args[0] to the place args[1] names: it serves
-// "hop s3 push" and "hop push <file> s3://...".
+// runS3Push uploads the files named by every argument but the last to the place the
+// last one names: it serves "hop s3 push" and "hop push <file>... s3://...".
 func runS3Push(cmd *cobra.Command, f *filters, force bool, args []string) error {
-	local := args[0]
-	st, err := os.Stat(local)
-	switch {
-	case err != nil || st.IsDir():
-		return fmt.Errorf("file not found: %s", local)
-	case !st.Mode().IsRegular():
-		return fmt.Errorf("%s is not a regular file", local)
+	dest := args[len(args)-1]
+	files, err := localFiles(args[:len(args)-1])
+	if err != nil {
+		return err
 	}
-	loc, err := bucket.Parse(args[1])
+	loc, err := bucket.Parse(dest)
 	switch {
 	case err != nil:
 		return err
 	case loc.Bucket == "":
-		return fmt.Errorf("no bucket in %q: expected bucket/key", args[1])
-	}
-	if loc.Key == "" || strings.HasSuffix(loc.Key, "/") {
-		loc.Key += filepath.Base(local)
+		return fmt.Errorf("no bucket in %q: expected bucket/key", dest)
+	case bucket.HasMeta(loc.Bucket) || bucket.HasMeta(loc.Key):
+		return fmt.Errorf("%s holds a wildcard: a destination is one bucket and one key", dest)
+	case len(files) > 1 && loc.Key != "" && !strings.HasSuffix(loc.Key, "/"):
+		return fmt.Errorf("%s need a destination that ends with /, where each keeps its name: %s/", plural(len(files), "file"), dest)
 	}
 	a, err := newApp(*f)
 	if err != nil {
 		return err
 	}
 	ctx := cmd.Context()
-	b, cfg, err := a.reachBucket(ctx, nameOf(args[1], loc.Bucket), forUpload)
+	b, cfg, err := a.reachBucket(ctx, nameOf(dest, loc.Bucket), forUpload)
 	if err != nil {
 		return err
 	}
-	loc.Bucket = b.Name
+	sent := 0
+	for _, local := range files {
+		to := bucket.Location{Bucket: b.Name, Key: loc.Key}
+		if to.Key == "" || strings.HasSuffix(to.Key, "/") {
+			to.Key += filepath.Base(local)
+		}
+		err := a.upload(ctx, cfg, b, local, to, force)
+		switch {
+		case err == nil:
+			sent++
+		case len(files) == 1:
+			return err
+		case errors.Is(err, errAborted) && ctx.Err() == nil:
+			// A no to replacing one object is not a no to the files that follow.
+			info("%s left as it is", printable(to.String()))
+		default:
+			return fmt.Errorf("%w (%d of %s sent)", err, sent, plural(len(files), "file"))
+		}
+	}
+	if len(files) > 1 {
+		info("%d of %s sent to %s", sent, plural(len(files), "file"), printable(bucket.Location{Bucket: b.Name, Key: loc.Key}.String()))
+	}
+	return nil
+}
+
+// localFiles returns the files an upload was given. An argument that names no file
+// and holds a wildcard is a pattern, read here: the shell did not expand it, quoted or
+// not (zsh passes it on under noglob, which hop's zsh integration sets). Directories a
+// pattern matches are left out.
+func localFiles(args []string) ([]string, error) {
+	var out []string
+	for _, arg := range args {
+		st, err := os.Stat(arg)
+		switch {
+		case err == nil && st.Mode().IsRegular():
+			out = append(out, arg)
+		case err == nil && !st.IsDir():
+			return nil, fmt.Errorf("%s is not a regular file", arg)
+		case err != nil && bucket.HasMeta(arg):
+			matches, _ := filepath.Glob(arg)
+			n := len(out)
+			for _, m := range matches {
+				if st, err := os.Stat(m); err == nil && st.Mode().IsRegular() {
+					out = append(out, m)
+				}
+			}
+			if len(out) == n {
+				return nil, fmt.Errorf("no file matches %s", arg)
+			}
+		default:
+			return nil, fmt.Errorf("file not found: %s", arg)
+		}
+	}
+	return out, nil
+}
+
+// upload sends one file to loc in the bucket b, after a look at what is there: an
+// existing object is replaced only after a yes, or with force.
+func (a *app) upload(ctx context.Context, cfg aws.Config, b inventory.Bucket, local string, loc bucket.Location, force bool) error {
 	// Always say where the file is going, even from a script.
 	info("%s -> %s (%s, %s)", local, printable(loc.String()), b.Profile, b.Region)
 
@@ -663,6 +795,75 @@ func runS3Push(cmd *cobra.Command, f *filters, force bool, args []string) error 
 		return nil
 	}
 	info("%s sent, %s matches on both sides", byteSize(res.Size), res.Checksum)
+	return nil
+}
+
+// runS3PullMany downloads every object of one prefix that fits the pattern in the key
+// of a place ("acme-logs/2026/*.log"), into a directory, each under its own name.
+func runS3PullMany(cmd *cobra.Command, f *filters, arg string, loc bucket.Location, dir string) error {
+	prefix, pattern := bucket.SplitPattern(loc.Key)
+	if strings.Contains(pattern, "/") {
+		return fmt.Errorf("the pattern %q spans several levels: hop s3 pull takes the objects of one prefix at a time (hop s3 ls '%s' shows what it matches)", pattern, arg)
+	}
+	filter, err := bucket.NewFilter(pattern, nil)
+	if err != nil {
+		return err
+	}
+	if dir == "" {
+		dir = "."
+	}
+	// Before the picker, a question or a sign-in, which would all be for nothing.
+	if st, err := os.Stat(dir); err != nil || !st.IsDir() {
+		return fmt.Errorf("%s is not a directory: the objects a pattern matches need one to land in", dir)
+	}
+	a, err := newApp(*f)
+	if err != nil {
+		return err
+	}
+	ctx := cmd.Context()
+	b, cfg, err := a.reachBucket(ctx, nameOf(arg, loc.Bucket), forDownload)
+	if err != nil {
+		return err
+	}
+	loc.Bucket, loc.Key = b.Name, prefix
+	objs, err := bucket.List(ctx, cfg, loc, false, nil)
+	if err != nil {
+		return err
+	}
+	var found []bucket.Object
+	size := int64(0)
+	for _, o := range objs {
+		if !o.Prefix && filter.Match(strings.TrimPrefix(o.Key, prefix)) {
+			found = append(found, o)
+			size += o.Size
+		}
+	}
+	place := printable(loc.String() + pattern)
+	if len(found) == 0 {
+		return fmt.Errorf("no object matches %s", place)
+	}
+	what := fmt.Sprintf("%s (%s) matching %s", plural(len(found), "object"), byteSize(size), place)
+	// Several files land at once, and replace those of the same name: worth a look
+	// first, where somebody can answer.
+	if len(found) > 1 && stdinTTY && stderrTTY {
+		if err := ask(ctx, fmt.Sprintf("Download %s to %s?", what, dir), true); err != nil {
+			return err
+		}
+	} else {
+		info("%s", what)
+	}
+	for i, o := range found {
+		target, err := pullTarget(o.Key, dir)
+		if err == nil {
+			err = a.download(ctx, cfg, b, bucket.Location{Bucket: b.Name, Key: o.Key}, target)
+		}
+		if err != nil {
+			return fmt.Errorf("%w (%d of %s downloaded)", err, i, plural(len(found), "object"))
+		}
+	}
+	if len(found) > 1 {
+		info("%s downloaded to %s", plural(len(found), "object"), dir)
+	}
 	return nil
 }
 

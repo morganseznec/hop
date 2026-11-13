@@ -234,6 +234,11 @@ zsh, in `~/.zshrc` after `compinit`:
 eval "$(hop init zsh)"
 ```
 
+In zsh, this also runs hop under `noglob`: a pattern such as `acme-*` or `*.log`
+reaches hop as typed, instead of being expanded against the files of the current
+directory, or refused with `no matches found`. hop reads patterns itself, the files of
+`hop s3 push` included.
+
 bash, in `~/.bashrc` (with the `bash-completion` package when it is installed, without
 it otherwise):
 
@@ -267,7 +272,8 @@ typed (`hop -p acme-prod <Tab>`).
 | ssh, scp, rsync | `hop init ssh >> ~/.ssh/config` once, then `ssh ec2-user@tools.hop` |
 | Upload a file | `hop push ./app.conf tools /etc/app.conf`, `hop push ./release.tar.gz web /opt/app/release.tar.gz` |
 | Download a file | `hop pull tools /var/log/app.log`, `hop pull tools /etc/app.conf conf/` |
-| Pick an S3 bucket and browse it | `hop s3` |
+| Pick an S3 bucket and browse it | `hop s3`, `hop s3 billing logs`, `hop s3 logs/2026/` |
+| Find a bucket, or a file in a bucket | `hop s3 ls 'acme-p-*' logs`, `hop s3 ls -R logs/ error '*.gz'` |
 | S3 buckets and objects | `hop s3 ls`, `hop s3 ls -lh logs/2026/`, `hop s3 pull logs/2026/app.log`, `hop s3 push dump.sql backups/db/` |
 | SSO login | `hop login`, `hop login --status`, `hop login acme` |
 | Check your setup | `hop doctor` |
@@ -460,9 +466,15 @@ hop: 1.2 MB received, CRC64NVME matches on both sides
   down, `..` goes back up (and from the top, back to the buckets), Enter on an object
   downloads it to the current directory, after a question. Esc quits. `-p`, `-r` and
   `-e` narrow the buckets shown. Without a terminal, `hop s3` prints its help.
+- **Straight to a bucket.** With words, `hop s3` searches the buckets first, as `hop`
+  searches instances: `hop s3 billing logs` opens the one bucket those words find, or
+  shows the picker over the buckets that match, and only them. That is the quick way
+  through an account with a hundred buckets. With a place, the picker opens there:
+  `hop s3 logs/2026/`.
 - **Buckets.** `hop s3 ls` takes one `ListBuckets` call per profile, cached like the
   instances, and shows each bucket in the region it lives in. Words filter the list
-  (`hop s3 ls logs`), `-r` keeps the buckets of some regions, `-e` an environment,
+  (`hop s3 ls logs`), and so do patterns (`hop s3 ls 'acme-p-*' logs`), `-r` keeps
+  the buckets of some regions, `-e` an environment,
   read from the name of the bucket or of the profile. Listing instances never calls
   S3.
 - **Objects.** An argument with a `/` names a place in a bucket: `acme-p-logs/` is
@@ -473,6 +485,20 @@ hop: 1.2 MB received, CRC64NVME matches on both sides
   otherwise, and the footer says how many), `-R` for every object below, `-t` and
   `-S` to sort. `-h` on its own stays the help, and reversing is `--reverse`, since
   `-r` is `--region`. `--json` is for scripts.
+- **Finding a file.** What follows the place filters what it holds. A plain word must
+  be part of the name, in any case; a word with a wildcard is a pattern for the name,
+  or for its last part: `hop s3 ls acme-p-logs/2026/ error '*.gz'`. A pattern can also
+  end the place itself: `hop s3 ls 'acme-p-logs/2026/*.log'`. That looks at one level;
+  with `-R`, at every object below, which is how to find a file somewhere in a bucket:
+  `hop s3 ls -R acme-p-logs/ error 2026-11`. S3 only searches by the start of a key,
+  so hop reads the listing and filters it: a call per thousand objects.
+- **Patterns.** `*` stands for any run of characters, `?` for one, `[abc]` for one of
+  a set, and none of them crosses a `/`. They work in the filters of `hop s3 ls`, in
+  `hop s3 <words>`, in the key given to `hop s3 pull` and for the files of
+  `hop s3 push`. zsh expands a pattern itself before hop sees it, and stops on
+  `no matches found` when no file here fits: quote it (`'acme-p-*'`), or load hop's zsh
+  integration (`eval "$(hop init zsh)"`), which runs hop under `noglob`. bash passes on
+  a pattern that matches no file; in fish, quote it.
 - **Which bucket.** The bucket part is searched like an instance name, among the
   buckets listed. The exact name, or whole words of it (`logs/` for `acme-p-logs`),
   is used directly; a looser match asks first, and without a terminal hop lists the
@@ -488,11 +514,15 @@ hop: 1.2 MB received, CRC64NVME matches on both sides
   ranges of 8 MB, five at a time, into a temporary file renamed once it is complete.
   hop compares the size, and the checksum S3 holds for the whole object when there is
   one; otherwise it says that only the size was checked (an object sent without a
-  checksum, or in parts by a tool that kept only a checksum of its parts).
+  checksum, or in parts by a tool that kept only a checksum of its parts). A key with
+  a pattern downloads every object of that prefix that fits, each under its own name,
+  into a directory: `hop s3 pull 'acme-p-logs/2026/11/*.gz' logs/`. hop says how many
+  and how much first, and asks when there are several.
 - **Upload.** `hop s3 push <local-file> <bucket>[/<key>]` sends a file of 16 MB or
   more as a multipart upload, in parts of 8 MB, five at a time, and aborts it when it
   fails or is interrupted, so no part stays in the bucket. A key that ends with `/`
-  keeps the name of the file. hop never replaces an object without asking: it asks
+  keeps the name of the file, and takes several files at once:
+  `hop s3 push ./logs/*.gz acme-p-backups/logs/`. hop never replaces an object without asking: it asks
   when the key exists, refuses without a terminal unless `--force` is given, and S3
   itself refuses the write if the object appeared meanwhile. S3 checks a CRC32 of
   each request and returns the one of the whole object, which hop compares with the
