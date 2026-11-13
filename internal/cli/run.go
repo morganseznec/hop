@@ -117,8 +117,9 @@ stays there: see hop s3 push.`, session.PushLimit/1000),
   hop push --relay ./api.key tools /etc/app/api.key       a small file, the same way
   hop push ./dump.sql.gz s3://acme-backups/db/            to a bucket (see hop s3 push)`,
 		Args: func(cmd *cobra.Command, args []string) error {
-			if len(args) >= 2 && bucket.HasScheme(args[1]) {
-				return cobra.ExactArgs(2)(cmd, args)
+			// To a bucket: one file or several, then the place.
+			if len(args) >= 2 && bucket.HasScheme(args[len(args)-1]) {
+				return nil
 			}
 			return cobra.ExactArgs(3)(cmd, args)
 		},
@@ -132,7 +133,7 @@ stays there: see hop s3 push.`, session.PushLimit/1000),
 			return nil, cobra.ShellCompDirectiveNoFileComp
 		},
 		RunE: func(cmd *cobra.Command, args []string) error {
-			if bucket.HasScheme(args[1]) {
+			if bucket.HasScheme(args[len(args)-1]) {
 				if relay {
 					return errors.New("--relay is for a push to an instance: an s3:// destination is the bucket itself")
 				}
@@ -140,6 +141,17 @@ stays there: see hop s3 push.`, session.PushLimit/1000),
 			}
 			if force {
 				return errors.New("--force is for an s3:// destination: a file pushed to an instance always replaces the one there")
+			}
+			// A pattern the shell left as it is (quoted, or zsh under noglob): the one
+			// file it names.
+			if _, err := os.Stat(args[0]); err != nil && bucket.HasMeta(args[0]) {
+				switch matches, _ := filepath.Glob(args[0]); len(matches) {
+				case 0:
+				case 1:
+					args[0] = matches[0]
+				default:
+					return fmt.Errorf("%s matches %s: hop push sends one file to an instance", args[0], plural(len(matches), "file"))
+				}
 			}
 			st, err := os.Stat(args[0])
 			if err != nil || st.IsDir() {

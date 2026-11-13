@@ -145,8 +145,8 @@ the listing, in the order shown:
 | `storage_class` | string, optional | `STANDARD`, `STANDARD_IA`, `GLACIER`... Absent for a prefix. |
 | `prefix` | boolean, optional | `true` for a group of keys that share what comes before the next `/`. Absent with `-R`, which lists every object. |
 
-`-a`, `-t`, `-S` and `--reverse` apply to the JSON output too: without `-a`, the
-entries whose name starts with a dot are left out, and stderr says how many.
+`-a`, `-t`, `-S`, `--reverse` and the filters apply to the JSON output too: without
+`-a`, the entries whose name starts with a dot are left out, and stderr says how many.
 
 ## Limits and timings
 
@@ -159,8 +159,10 @@ entries whose name starts with a dot are left out, and stderr says how many.
 | `hop push` through a relay bucket | Past 64 KB, or with `--relay`, when `relay_buckets` names a bucket for the profile (its own name first, else the longest pattern that matches). No size limit: the upload follows the rules of `hop s3 push` below. hop waits for the instance 2 minutes plus one second per MB, 12 hours at most; the signed URL is valid for that long plus 5 minutes. The instance downloads next to the destination, so it needs twice the size there while the file is copied. The temporary object is deleted afterwards, unless the instance may still be fetching it when hop stops waiting. |
 | `hop pull` | No size limit, from an absolute path, read as the session user or with `sudo -n`. The file is written under a temporary name next to its destination, then renamed once the SHA-256 matches on both sides. The SSM agent keeps the output on the instance's disk while it streams, in base64. |
 | `hop s3 ls` | The buckets of a profile are cached like its instances (`cache_ttl`), and read again when a name finds nothing in a list more than one minute old. Objects are never cached: a listing takes one call per 1,000 keys, and holds the whole listing in memory before printing it. |
+| Filters and patterns | S3 searches by the start of a key only: the part of a place before its first wildcard is what S3 lists, and hop filters the rest. Words after the place are compared in any case; a pattern inside the place, part of a key, as typed. `*` and `?` never cross a `/`. A pattern that names several levels (`*/app.log`) reads every object below, as `-R` does. |
+| `hop s3 pull` with a pattern | The objects of one prefix that fit the pattern, into a directory (the current one by default), one after the other; hop stops at the first that fails and says how many arrived. A pattern that names several levels is refused. |
 | `hop s3 pull` | No size limit. Ranges of 8 MB, five at a time, each tried up to three times when the connection drops, all from the same version of the object. The file is written under a temporary name next to its destination, then renamed once the size matches and, when S3 holds a checksum of the whole object (SHA-256, CRC-64/NVME, CRC-32C or CRC-32), once that matches too. An archived object must be restored first. |
-| `hop s3 push` | One request up to 16 MB, a multipart upload from there: parts of 8 MB, five at a time, larger parts past 80 GB (S3 takes 10,000 parts). A failed or interrupted upload is aborted, Ctrl-C included (the abort gets 10 seconds). An existing object is replaced only after a yes, or with `--force`. The content type is set from the file extension. |
+| `hop s3 push` | One request up to 16 MB, a multipart upload from there: parts of 8 MB, five at a time, larger parts past 80 GB (S3 takes 10,000 parts). A failed or interrupted upload is aborted, Ctrl-C included (the abort gets 10 seconds). An existing object is replaced only after a yes, or with `--force`. The content type is set from the file extension. Several files go one after the other, to a destination that ends with `/`: a no to replacing one skips it, any other failure stops, and hop says how many were sent. |
 | Inventory cache | 15 minutes (`cache_ttl`). A profile and region whose query failed is retried after one minute. |
 | Freshness before acting | An instance whose data is more than one minute old is looked up again before hop acts on it. |
 | Inventory queries | 16 profile/region pairs at a time, 25 seconds each at most. |

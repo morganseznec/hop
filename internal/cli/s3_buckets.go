@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path"
 	"slices"
 	"strings"
 	"time"
@@ -169,6 +170,39 @@ func (a *app) searchBuckets(bs []inventory.Bucket, query string) (match.Result, 
 	return res, out
 }
 
+// matchBuckets returns the buckets that answer what was typed. Plain words are searched
+// as for instances: whole words of the name first, then parts of it, of the profile, of
+// the region. As soon as a word holds a wildcard, each word is taken as it is instead:
+// a pattern for the whole bucket name ("acme-p-*"), a plain word for a part of the
+// line, all of them at once, in any case.
+func (a *app) matchBuckets(bs []inventory.Bucket, words []string) ([]inventory.Bucket, error) {
+	if !slices.ContainsFunc(words, bucket.HasMeta) {
+		_, found := a.searchBuckets(bs, strings.Join(words, " "))
+		return found, nil
+	}
+	if _, err := bucket.NewFilter("", words); err != nil {
+		return nil, err
+	}
+	var out []inventory.Bucket
+	for _, b := range bs {
+		line := strings.ToLower(strings.Join([]string{b.Name, b.Profile, b.Region, b.Env, a.cfg.Label(b.Profile)}, " "))
+		ok := true
+		for _, w := range words {
+			w = strings.ToLower(w)
+			if bucket.HasMeta(w) {
+				fits, _ := path.Match(w, strings.ToLower(b.Name))
+				ok = ok && fits
+			} else {
+				ok = ok && strings.Contains(line, w)
+			}
+		}
+		if ok {
+			out = append(out, b)
+		}
+	}
+	return out, nil
+}
+
 // bucketUse is what a bucket is resolved for: it words the question asked about a loose
 // match, and a doubt before writing is a no.
 type bucketUse struct {
@@ -178,6 +212,7 @@ type bucketUse struct {
 
 var (
 	forListing  = bucketUse{question: "List it?"}
+	forBrowsing = bucketUse{question: "Open it?"}
 	forDownload = bucketUse{question: "Download from it?"}
 	forUpload   = bucketUse{question: "Upload to it?", write: true}
 )

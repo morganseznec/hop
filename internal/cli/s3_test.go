@@ -258,8 +258,10 @@ func TestS3LsObjects(t *testing.T) {
 	if err != nil || stdout != "" || !strings.Contains(stderr, "0 objects in s3://acme-b-logs/nothing/") {
 		t.Errorf("empty prefix: %v, %q\n%s", err, stdout, stderr)
 	}
-	if _, _, err := runHop(t, "s3", "ls", "acme-b-logs/", "acme-b-backups/"); err == nil || !strings.Contains(err.Error(), "one place at a time") {
-		t.Errorf("two places: %v", err)
+	// What follows the place is what to look for in it, a second place included.
+	_, stderr, err = runHop(t, "s3", "ls", "-p", "acme-billing", "acme-b-logs/", "acme-b-backups/")
+	if err != nil || !strings.Contains(stderr, `0 objects matching "acme-b-backups/" in s3://acme-b-logs/`) {
+		t.Errorf("a second place is a filter: %v\n%s", err, stderr)
 	}
 }
 
