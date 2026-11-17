@@ -7,6 +7,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/mattn/go-runewidth"
@@ -152,7 +153,8 @@ func (a *app) browseBucket(ctx context.Context, cfg aws.Config, b inventory.Buck
 		// Everything, names that start with a dot included: nothing to type -a into.
 		entries, _ := listing(objs, prefix, listOptions{all: true})
 		// The cursor starts on the first entry: ".." stays one key away, just below.
-		i, err := choose(len(entries)+1, entryLines(entries, prefix == ""), browseHeader(entries, loc, pickerWidth()), min(1, len(entries)))
+		line, name := entryLines(entries, prefix == "")
+		i, err := choose(len(entries)+1, line, name, browseHeader(entries, loc, pickerWidth()), min(1, len(entries)))
 		if err != nil {
 			return false, err
 		}
@@ -227,8 +229,10 @@ func prefixCount(n int) string {
 
 // entryLines returns what the picker shows for a listing: ".." first, which top says
 // leaves the bucket, then each entry, an object with its size, its date and its storage
-// class.
-func entryLines(entries []entry, top bool) func(i int) string {
+// class. name tells how much of a line is the name it starts with: what is typed is
+// compared to names only, or "11" would also find every object of 11 KB, and every one
+// written in November.
+func entryLines(entries []entry, top bool) (line func(i int) string, name func(i int) int) {
 	width := runewidth.StringWidth(upLine)
 	for _, e := range entries {
 		width = max(width, runewidth.StringWidth(printable(e.name)))
@@ -237,7 +241,7 @@ func entryLines(entries []entry, top bool) func(i int) string {
 	if top {
 		up = "back to the list of buckets"
 	}
-	return func(i int) string {
+	line = func(i int) string {
 		if i == 0 {
 			return runewidth.FillRight(upLine, width) + "  " + up
 		}
@@ -248,6 +252,13 @@ func entryLines(entries []entry, top bool) func(i int) string {
 		return strings.TrimRight(fmt.Sprintf("%s  %9s  %s  %s", runewidth.FillRight(printable(e.name), width),
 			byteSize(e.Size), e.Modified.In(displayZone).Format("2006-01-02 15:04"), e.StorageClass), " ")
 	}
+	name = func(i int) int {
+		if i == 0 {
+			return utf8.RuneCountInString(upLine)
+		}
+		return utf8.RuneCountInString(printable(entries[i-1].name))
+	}
+	return line, name
 }
 
 // offerDownload asks whether to download the object chosen to the current directory,

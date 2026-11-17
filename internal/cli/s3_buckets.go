@@ -11,13 +11,13 @@ import (
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
-	fuzzyfinder "github.com/ktr0731/go-fuzzyfinder"
 	"github.com/mattn/go-runewidth"
 	"golang.org/x/term"
 
 	"github.com/morganseznec/hop/internal/bucket"
 	"github.com/morganseznec/hop/internal/inventory"
 	"github.com/morganseznec/hop/internal/match"
+	"github.com/morganseznec/hop/internal/picker"
 )
 
 // bucketScope explains a scope without any AWS profile before S3 is queried: buckets
@@ -458,8 +458,8 @@ func regionOr(region string) string {
 	return region
 }
 
-// pickBucket opens the fuzzy picker over buckets: name, profile, region and
-// environment on each line, all of them searchable.
+// pickBucket opens the picker over buckets: name, profile, region and environment on
+// each line, all of them searched, so that "prod logs" finds the logs of production.
 func (a *app) pickBucket(items []inventory.Bucket, header string) (inventory.Bucket, error) {
 	// Columns as wide as what they hold, no wider: a bucket name is long, and the
 	// picker cuts what goes past the terminal.
@@ -474,7 +474,7 @@ func (a *app) pickBucket(items []inventory.Bucket, header string) (inventory.Buc
 		return strings.TrimRight(fmt.Sprintf("%s  %s  %-*s  %s",
 			runewidth.FillRight(b.Name, wName), runewidth.FillRight(a.profileLabel(b.Profile), wProf), wRegion, b.Region, b.Env), " ")
 	}
-	i, err := choose(len(items), line, header, 0)
+	i, err := choose(len(items), line, nil, header, 0)
 	if err != nil {
 		return inventory.Bucket{}, err
 	}
@@ -490,16 +490,14 @@ var pickerWidth = func() int {
 	return 100
 }
 
-// choose opens the fuzzy picker over n lines and returns the index of the one chosen,
-// or errAborted on Esc. It has no side panel: with one, the picker gives the lines and
-// the header half the width of the terminal, too little for a bucket name next to its
-// profile, or for a key. The cursor starts on the line start. It is a variable so that
-// tests can choose without a terminal.
-var choose = func(n int, line func(i int) string, header string, start int) (int, error) {
-	i, err := fuzzyfinder.Find(make([]struct{}, n), line,
-		fuzzyfinder.WithPromptString("hop> "), fuzzyfinder.WithHeader(header),
-		fuzzyfinder.WithPreselected(func(i int) bool { return i == start }))
-	if errors.Is(err, fuzzyfinder.ErrAbort) {
+// choose opens the picker over n lines and returns the index of the one chosen, or
+// errAborted on Esc. It has no side panel: a bucket name next to its profile, or a key,
+// needs the whole width of the terminal. The cursor starts on the line start. searched
+// tells how many characters of a line, from its start, are compared to what is typed;
+// nil is the whole line. It is a variable so that tests can choose without a terminal.
+var choose = func(n int, line func(i int) string, searched func(i int) int, header string, start int) (int, error) {
+	i, err := picker.Pick(n, line, picker.Options{Prompt: "hop> ", Header: header, Start: start, Searched: searched})
+	if errors.Is(err, picker.ErrAborted) {
 		return 0, errAborted
 	}
 	return i, err

@@ -15,7 +15,9 @@ import (
 type screen struct {
 	header string
 	lines  []string
-	start  int
+	// searched is the part of each line that what is typed is compared to.
+	searched []string
+	start    int
 }
 
 // names returns the first word of each line: the bucket, or the name of the entry.
@@ -36,10 +38,15 @@ func scriptPicker(t *testing.T, wants ...string) *[]screen {
 	saved, width := choose, pickerWidth
 	t.Cleanup(func() { choose, pickerWidth = saved, width })
 	pickerWidth = func() int { return 120 }
-	choose = func(n int, line func(int) string, header string, start int) (int, error) {
+	choose = func(n int, line func(int) string, searched func(int) int, header string, start int) (int, error) {
 		s := screen{header: header, start: start}
 		for i := 0; i < n; i++ {
-			s.lines = append(s.lines, line(i))
+			l := line(i)
+			s.lines = append(s.lines, l)
+			if searched != nil {
+				l = string([]rune(l)[:searched(i)])
+			}
+			s.searched = append(s.searched, l)
 		}
 		screens = append(screens, s)
 		if len(wants) == 0 {
@@ -103,6 +110,18 @@ func TestS3Browse(t *testing.T) {
 	}
 	if !strings.Contains(s[1].lines[0], "back to the list of buckets") {
 		t.Errorf("first line at the top: %q", s[1].lines[0])
+	}
+	// What is typed is compared to the names of a listing, and not to sizes, dates or
+	// storage classes, where digits would find objects by accident. A bucket is found
+	// by all its line says: its profile, its region, its environment.
+	if got := strings.Join(s[1].searched, "|"); got != "..|2026/|top.bin" {
+		t.Errorf("searched at the top of the bucket: %s", got)
+	}
+	if got := strings.Join(s[2].searched, "|"); got != "..|.env|.git/|11/|readme.txt" {
+		t.Errorf("searched in 2026/: %s", got)
+	}
+	if s[0].searched[2] != s[0].lines[2] {
+		t.Errorf("searched for a bucket: %q of %q", s[0].searched[2], s[0].lines[2])
 	}
 	// The cursor starts on the first bucket, then on the first entry of a listing,
 	// not on the way back.

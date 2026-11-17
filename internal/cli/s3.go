@@ -39,9 +39,11 @@ bucket from an instance on the other commands: hop ls s3://acme-logs/,
 hop pull s3://acme-logs/app.log, hop push dump.sql s3://acme-backups/.
 
 With no command, in a terminal, hop s3 opens a picker over those buckets, like hop
-does over instances: type to filter, Enter to open one. Inside, the same picker shows
-what the bucket holds: Enter on a prefix goes down, ".." goes back up, and Enter on
-an object downloads it to the current directory, after a question.
+does over instances: type words to filter, Enter to open one. Inside, the same picker
+shows what the bucket holds: Enter on a prefix goes down, ".." goes back up, and Enter
+on an object downloads it to the current directory, after a question. What is typed
+there is compared to names, whatever their separators: "2026 11 05" finds
+app_2026-11-05.log.gz, and not the objects written on that day.
 
 With words, hop s3 searches the buckets first, as hop searches instances: a single
 bucket found opens at once, several show in the picker, and only them. That is the

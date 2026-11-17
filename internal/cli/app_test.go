@@ -14,6 +14,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"runtime"
+	"slices"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -24,6 +25,7 @@ import (
 	"github.com/morganseznec/hop/internal/awsconf"
 	"github.com/morganseznec/hop/internal/config"
 	"github.com/morganseznec/hop/internal/inventory"
+	"github.com/morganseznec/hop/internal/picker"
 )
 
 func profileNames(ps []*awsconf.Profile) []string {
@@ -657,6 +659,52 @@ func TestPickWithoutTerminal(t *testing.T) {
 	_, err := a.pick(items, "")
 	if err == nil || err.Error() != "several instances match, be more specific: tools (acme-data, eu-west-1); tools (globex, us-east-1)" {
 		t.Errorf("error %v", err)
+	}
+}
+
+func TestPickWithATerminal(t *testing.T) {
+	terminal(t, true, true)
+	a := newTestApp(t, &config.Config{Labels: map[string]string{"acme-prod": "ACME"}}, filters{})
+	items := []inventory.Instance{
+		instance("acme-p-tools", "i-04", "acme-prod", "eu-west-1", "running", "prod"),
+		instance("tools", "i-05", "globex", "us-east-1", "stopped", ""),
+	}
+	items[1].Agent = ""
+	saved := pickInstance
+	t.Cleanup(func() { pickInstance = saved })
+
+	var lines []string
+	var shown picker.Options
+	pickInstance = func(n int, line func(int) string, o picker.Options) (int, error) {
+		for i := 0; i < n; i++ {
+			lines = append(lines, strings.Join(strings.Fields(line(i)), " "))
+		}
+		shown = o
+		return 1, nil
+	}
+	in, err := a.pick(items, "")
+	if err != nil || in.ID != "i-05" {
+		t.Fatalf("picked %s, %v", in.ID, err)
+	}
+	if want := []string{"● acme-p-tools acme-prod (ACME) eu-west-1 prod", "· tools globex us-east-1 (stopped)"}; !slices.Equal(lines, want) {
+		t.Errorf("lines:\n got %q\nwant %q", lines, want)
+	}
+	if shown.Prompt != "hop> " || shown.Header != "2 instances · ● agent online · Enter to connect, Esc to cancel" {
+		t.Errorf("prompt %q, header %q", shown.Prompt, shown.Header)
+	}
+	// Everything on a line is searched: name, profile, label, region. The side panel
+	// says more of the instance under the cursor.
+	if shown.Searched != nil {
+		t.Error("only a part of the line of an instance is searched")
+	}
+	if p := shown.Preview(0); !strings.Contains(p, "instance      i-04") || !strings.Contains(p, "profile       acme-prod (ACME)") {
+		t.Errorf("side panel:\n%s", p)
+	}
+
+	// Esc in the picker ends like a canceled command.
+	pickInstance = func(int, func(int) string, picker.Options) (int, error) { return 0, picker.ErrAborted }
+	if _, err := a.pick(items, "one of two"); !errors.Is(err, errAborted) {
+		t.Errorf("Esc: %v", err)
 	}
 }
 

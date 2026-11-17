@@ -1,8 +1,8 @@
 # hop reference
 
 Details that the [README](../README.md) leaves out: exit codes, the JSON output of
-`hop ls` and `hop s3 ls`, limits, environment variables, the columns of `hop ls` and
-`hop s3 ls`, and where hop keeps its files. Accounts, names and addresses below are fictional.
+`hop ls` and `hop s3 ls`, the keys of the picker, limits, environment variables, the
+columns of `hop ls` and `hop s3 ls`, and where hop keeps its files. Accounts, names and addresses below are fictional.
 
 ## Exit codes
 
@@ -147,6 +147,30 @@ the listing, in the order shown:
 
 `-a`, `-t`, `-S`, `--reverse` and the filters apply to the JSON output too: without
 `-a`, the entries whose name starts with a dot are left out, and stderr says how many.
+
+## Keys of the picker
+
+The picker of `hop` (instances) and of `hop s3` (buckets, then what a bucket holds).
+
+| Key | What it does |
+|---|---|
+| any character | Adds to what is typed. The list keeps the lines that hold every word, and the cursor goes to the first of them. |
+| ↑, Ctrl-P, Ctrl-K | One line up. At the top of the list, to the bottom. |
+| ↓, Ctrl-N, Ctrl-J | One line down. At the bottom of the list, to the top. |
+| PgUp, PgDn | One screen up or down. Stops at the ends. |
+| Enter | Chooses the line under the cursor. Does nothing when no line is left. |
+| Esc, Ctrl-C, Ctrl-D | Leaves without a choice (exit code 130). |
+| ←, →, Ctrl-B, Ctrl-F | Move in what is typed. |
+| Home, End, Ctrl-A, Ctrl-E | To the start or the end of what is typed. |
+| Backspace, Delete | Erase one character. |
+| Ctrl-W | Erases the word before the cursor. |
+| Ctrl-U | Erases what is before the cursor. |
+
+A word is found as typed, anywhere in the line, in any case. It is also found without
+separators, from the start of a part of the name: `20261105` and `2026_11_05` find
+`2026-11-05`, and `611` does not find `2026-11`. The lines that hold the words in the
+order typed come before those that hold them in another order. In a bucket, what is
+typed is compared to the names of objects and prefixes, not to the rest of their line.
 
 ## Limits and timings
 
