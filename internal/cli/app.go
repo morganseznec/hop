@@ -45,6 +45,9 @@ type app struct {
 	// background is set for the detached refresh started by completion: it must not
 	// run credential_process helpers, which may prompt or open a window.
 	background bool
+	// declined holds the SSO portals the user chose not to sign in to during this
+	// call: the question is not asked twice.
+	declined map[string]bool
 }
 
 func newApp(f filters) (*app, error) {
@@ -793,6 +796,19 @@ func (a *app) resolve(ctx context.Context, args []string, why purpose) (in inven
 		v = decide(res.Matches, query, interactive)
 	}
 
+	// Before a question about the candidates, or a refusal: some may come from
+	// accounts hop could not look at (see signInFor).
+	if len(res.Matches) > 0 && v != verdictAct {
+		again, err := a.signInFor(ctx, res.Matches)
+		if err != nil {
+			return inventory.Instance{}, false, err
+		}
+		if again {
+			res = match.Search(a.instances(true), query, a.recents, a.cfg.Label)
+			v = decide(res.Matches, query, interactive)
+		}
+	}
+
 	notFound := func(suggestions []string) error {
 		a.reportProblems()
 		msg := "no instance matches \"" + query + "\""
@@ -861,6 +877,10 @@ func (a *app) resolve(ctx context.Context, args []string, why purpose) (in inven
 			return inventory.Instance{}, false, fmt.Errorf("\"%s\" only partly matches %s (%s, %s): give its full name, ID or IP, or narrow with -p, -r or -e (no terminal to confirm)",
 				query, in.Name, in.Profile, in.Region)
 		}
+		// Nobody to offer a sign-in to: say which accounts could not be looked at.
+		if a.unchecked(res.Matches) {
+			a.reportProblems()
+		}
 		return inventory.Instance{}, false, severalMatch(res.Matches)
 	case verdictConfirm:
 		in := res.Matches[0]
@@ -879,6 +899,93 @@ func (a *app) resolve(ctx context.Context, args []string, why purpose) (in inven
 	}
 	in, err = a.pickRunning(res.Matches, header)
 	return in, true, err
+}
+
+// unchecked reports whether one of the instances comes from an account that the last
+// query could not reach: what the cache holds of it is older than it looks.
+func (a *app) unchecked(matches []inventory.Instance) bool {
+	for _, in := range matches {
+		if t := a.target(in); t != nil && t.Err != "" {
+			return true
+		}
+	}
+	return false
+}
+
+// signInFor is called when hop is about to ask about candidates: which of them, or
+// whether the one it found is meant. Some may come from accounts it could not look at,
+// because the sign-in of their SSO portal has expired. What the cache holds of those
+// accounts dates from the last time it had not: an instance renamed or terminated
+// since is still a candidate, under the name it had, and the choice offered is not the
+// one that exists.
+//
+// With a terminal, signInFor offers to sign in to those portals, queries their
+// accounts again, and reports that the search is to be run once more. A portal whose
+// token was renewed meanwhile (a login in another terminal) is queried without a
+// question. One the user declines is not offered again during this call (see
+// awsConfig).
+func (a *app) signInFor(ctx context.Context, matches []inventory.Instance) (again bool, err error) {
+	if !stdinTTY || !stderrTTY {
+		return false, nil
+	}
+	signed := map[string]bool{}
+	seen := map[string]bool{}
+	for _, in := range matches {
+		t := a.target(in)
+		if in.GCP() || t == nil || t.ErrKind != inventory.ErrSSOExpired {
+			continue
+		}
+		pt, ok := a.ssoPortal(in.Profile)
+		if !ok || seen[pt.Key] || a.declined[pt.Key] {
+			continue
+		}
+		seen[pt.Key] = true
+		if !a.signedIn(ctx, in.Profile, in.Region) {
+			yes, err := confirm(ctx, fmt.Sprintf("SSO token expired for %s: hop cannot check the instances it found there. Sign in again now?", pt.Label()), true)
+			if err != nil {
+				return false, err
+			}
+			if !yes {
+				if a.declined == nil {
+					a.declined = map[string]bool{}
+				}
+				a.declined[pt.Key] = true
+				continue
+			}
+			if err := ssoLogin(pt); err != nil {
+				return false, err
+			}
+		}
+		a.invalidatePortal(pt)
+		signed[pt.Key] = true
+	}
+	if len(signed) == 0 {
+		return false, nil
+	}
+	// Every account in scope behind those portals, not only those of the candidates:
+	// the instance meant may be in another one.
+	var todo []inventory.Pair
+	for _, p := range a.pairs() {
+		if pt, ok := a.ssoPortal(p.Profile); ok && signed[pt.Key] {
+			delete(a.fetched, inventory.TargetKey(p.Profile, p.Region))
+			todo = append(todo, p)
+		}
+	}
+	return true, a.refresh(ctx, todo)
+}
+
+// signedIn reports whether a profile gets credentials as things are, without a
+// question.
+func (a *app) signedIn(ctx context.Context, profile, region string) bool {
+	if a.files.MFAProfile(profile) != nil {
+		return false
+	}
+	cfg, err := inventory.AWSConfig(ctx, profile, region, a.preferSSO(profile))
+	if err != nil {
+		return false
+	}
+	_, err = cfg.Credentials.Retrieve(ctx)
+	return err == nil
 }
 
 // reach resolves what was typed (see resolve) and returns the instance with the
@@ -1060,12 +1167,17 @@ func (a *app) awsConfig(ctx context.Context, profile, region string) (aws.Config
 	if !ok || inventory.Classify(err) != inventory.ErrSSOExpired {
 		return cfg, fmt.Errorf("credentials for profile %s: %w", profile, inventory.RedactError(err))
 	}
+	expired := fmt.Errorf("SSO token expired for %s: hop login %s", pt.Label(), pt.Label())
+	// Already asked, and declined, before the instance was chosen (see signInFor).
+	if a.declined[pt.Key] {
+		return cfg, expired
+	}
 	yes, err := confirm(ctx, fmt.Sprintf("SSO token expired for %s. Sign in again now?", pt.Label()), true)
 	if err != nil {
 		return cfg, err
 	}
 	if !yes {
-		return cfg, fmt.Errorf("SSO token expired for %s: hop login %s", pt.Label(), pt.Label())
+		return cfg, expired
 	}
 	if err := ssoLogin(pt); err != nil {
 		return cfg, err

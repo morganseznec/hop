@@ -6,6 +6,21 @@ All notable changes to hop are listed here. The format follows
 
 ## [Unreleased]
 
+## [0.9.2] - 2026-11-17
+
+hop signs in before it asks to choose among instances it could not check.
+
+### Fixed
+
+- With an expired SSO sign-in, hop asked to choose between two instances of the same
+  name where only one existed: the cache still held an instance under a name it no
+  longer had, and hop could not query its account. Before a question about the
+  instances found, hop now offers to sign in to their portal, queries the accounts
+  behind it again, then searches once more: `hop pull app /var/log/app.log` goes to
+  the one instance of that name. A no keeps the choice as the cache has it, and the
+  question is not asked a second time. Without a terminal, the refusal says which
+  accounts could not be checked.
+
 ## [0.9.1] - 2026-11-17
 
 Installing with Homebrew no longer stops on a macOS warning.
@@ -432,7 +447,8 @@ First release.
   and Arch Linux packages, and a hardened Alpine image on GHCR. The Homebrew cask
   came with v0.1.1.
 
-[Unreleased]: https://github.com/morganseznec/hop/compare/v0.9.1...HEAD
+[Unreleased]: https://github.com/morganseznec/hop/compare/v0.9.2...HEAD
+[0.9.2]: https://github.com/morganseznec/hop/compare/v0.9.1...v0.9.2
 [0.9.1]: https://github.com/morganseznec/hop/compare/v0.9.0...v0.9.1
 [0.9.0]: https://github.com/morganseznec/hop/compare/v0.8.0...v0.9.0
 [0.8.0]: https://github.com/morganseznec/hop/compare/v0.7.0...v0.8.0
