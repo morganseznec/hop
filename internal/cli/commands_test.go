@@ -304,8 +304,17 @@ func TestCompletion(t *testing.T) {
 	if got, _ := push(cmd, []string{"local.txt"}, ""); len(got) != 3 {
 		t.Errorf("push, instance: %q", got)
 	}
-	if got, d := push(cmd, []string{"local.txt", "tools"}, ""); got != nil || d != cobra.ShellCompDirectiveNoFileComp {
+	// The path on the instance starts with "/", which Tab types; what follows is
+	// listed on the instance (see TestRemoteCompletion).
+	if got, d := push(cmd, []string{"local.txt", "tools"}, ""); !reflect.DeepEqual(got, []string{"/"}) || d != cobra.ShellCompDirectiveNoFileComp|cobra.ShellCompDirectiveNoSpace {
 		t.Errorf("push, remote path: %q %v", got, d)
+	}
+	// A bucket is not completed, and nothing follows the remote path.
+	if got, d := push(cmd, []string{"local.txt", "tools"}, "s3://acme"); got != nil || d != cobra.ShellCompDirectiveNoFileComp {
+		t.Errorf("push, to a bucket: %q %v", got, d)
+	}
+	if got, d := push(cmd, []string{"local.txt", "tools", "/etc/motd"}, ""); got != nil || d != cobra.ShellCompDirectiveNoFileComp {
+		t.Errorf("push, past the remote path: %q %v", got, d)
 	}
 
 	profiles, _ := completeProfiles(cmd, nil, "")

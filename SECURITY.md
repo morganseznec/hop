@@ -23,9 +23,12 @@ Only the latest release receives security fixes.
 
 In scope:
 
-- hop connecting, running a command or copying a file somewhere the user did not
-  choose (for example a fuzzy match acting without confirmation), or replacing an S3
-  object without a confirmation;
+- hop connecting, running a command, copying a file or listing a directory somewhere
+  the user did not choose (for example a fuzzy match acting without confirmation, or
+  Tab opening a session on an instance that was not named for sure), or replacing an
+  S3 object without a confirmation;
+- a name read on an instance (a file, a directory) that makes hop or the shell
+  integration run a command;
 - credentials, tokens or command output written to disk or logs by hop;
 - the session logging check reporting a session as logged when it is not.
 

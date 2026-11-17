@@ -31,6 +31,12 @@ In zsh, the integration also runs hop under noglob: patterns such as 'acme-*' or
 directory, or refused with "no matches found". hop reads them itself, the files of
 hop s3 push included.
 
+Completion suggests commands, instances, profiles and buckets from the cache. For
+hop pull and hop push, Tab also completes the path on the instance: it lists the
+directory there through a session that runs one command and writes nothing, only for
+an instance named without a doubt. "remote_completion: false" in hop's configuration
+turns that off.
+
 --alias NAME also makes NAME an alias for hop, with the same completion, and removes
 any shell function of that name that would shadow it. For people used to typing
 another name:

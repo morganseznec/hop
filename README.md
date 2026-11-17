@@ -228,6 +228,11 @@ notarized, so the Homebrew cask clears its quarantine flag after install.
 
 ### Shell completion
 
+Installed with Homebrew, hop comes with its completion for zsh, bash and fish:
+`hop p<Tab>` offers `pull` and `push`, `hop pull <Tab>` your instances. The shell
+integration below adds what a completion file cannot (in zsh, patterns that reach hop
+as typed; an alias under another name), and is how the other packages get completion.
+
 zsh, in `~/.zshrc` after `compinit`:
 
 ```zsh
@@ -258,6 +263,22 @@ same completion (`hop init zsh --alias ssm`). For PowerShell, see
 
 Completion suggests instance names from the cache and respects the flags already
 typed (`hop -p acme-prod <Tab>`).
+
+For `hop pull` and `hop push`, Tab also completes the path on the instance, as scp
+does over SSH: `hop pull tools /var/log/<Tab>` lists that directory there.
+
+- Only for an instance hop would act on without a question: its exact name, or whole
+  words of the name of one running instance. A completion never asks anything; when
+  it has nothing to offer, zsh and bash say why under the command line.
+- The directory is read through a session that runs one command and writes nothing,
+  as the session user, or with `sudo -n` when that user cannot open it (a home
+  directory, for one). Linux and macOS instances only.
+- Each directory listed is a `StartSession` call in CloudTrail and, when the account
+  logs sessions, its names in that log. hop keeps a listing for 30 seconds: a few
+  letters and Tab again start no other session.
+- Tab waits 8 seconds at most, and offers the first 2,000 names of a directory: type
+  the start of one to see the others.
+- `remote_completion: false` in hop's [configuration](#configuration) turns it off.
 
 ## Usage
 
@@ -395,6 +416,8 @@ hop pull db /var/backups/db.sql.gz /tmp/prod.sql.gz
   `transcript: require` does not apply.
 - Your role needs `ssm:StartSession` on the `AWS-StartNonInteractiveCommand` document
   (see [IAM permissions](#iam-permissions)).
+- With the [shell integration](#shell-completion), Tab completes the path on the
+  instance: `hop pull tools /var/log/<Tab>`.
 
 ### Uploading a large file
 
@@ -698,14 +721,19 @@ gcp_projects: ["*"]
 # file"): by profile or pattern, a bucket or a bucket and a key prefix.
 relay_buckets:
   "acme-*": acme-tools-relay/hop
+
+# Tab completes a path on an instance by listing its directory there, through a
+# session (see "Shell completion"). false: Tab never opens a session.
+remote_completion: true
 ```
 
 `hop scan --write` rewrites this file to add regions: comments are not kept, and the
 previous version stays next to it as `config.yaml.bak`.
 
 hop also writes `~/.cache/hop/inventory.json` (instances and bucket names, no
-credentials) and
-`~/.local/state/hop/recents.json` (recently used instances); on Windows both live in
+credentials), `~/.cache/hop/paths.json` (the directories of instances that Tab listed
+in the last 30 seconds) and
+`~/.local/state/hop/recents.json` (recently used instances); on Windows they live in
 `%LocalAppData%\hop`. The XDG variables are honoured when set.
 
 ## IAM permissions
@@ -715,8 +743,8 @@ credentials) and
 | `ec2:DescribeInstances` | inventory |
 | `ssm:DescribeInstanceInformation` | agent status, hybrid nodes |
 | `ssm:GetDocument` | session logging check |
-| `ssm:StartSession` | shell, tunnel, ssh, `hop pull` |
-| `ssm:TerminateSession`, `ssm:ResumeSession`, `ssmmessages:OpenDataChannel` | shell, tunnel, ssh, `hop pull` (your own sessions, also used by `session-manager-plugin`) |
+| `ssm:StartSession` | shell, tunnel, ssh, `hop pull`, Tab on a path of an instance |
+| `ssm:TerminateSession`, `ssm:ResumeSession`, `ssmmessages:OpenDataChannel` | shell, tunnel, ssh, `hop pull`, Tab on a path of an instance (your own sessions, also used by `session-manager-plugin`) |
 | `kms:GenerateDataKey` | shell, when the account encrypts sessions with KMS |
 | `ssm:SendCommand`, `ssm:GetCommandInvocation` | `hop run`, `hop push` |
 | `ssm:CancelCommand` | `hop run`, `hop push` (cancels a command the instance never picked up) |
@@ -838,7 +866,8 @@ The session statements follow the AWS sample policies for Session Manager. Every
 resource can be narrowed: instances to some accounts and regions, or to tags with an
 `ssm:resourceTag/...` condition, and the KMS key to the one in your session
 preferences. Drop what you do not use: `RunAndPush` and `FollowCommands` without
-`run` and `push`, the `AWS-StartNonInteractiveCommand` document without `pull`,
+`run` and `push`, the `AWS-StartNonInteractiveCommand` document without `pull` (Tab on
+a path of an instance needs it too),
 `KMSEncryptedSessions` when sessions are not KMS-encrypted,
 `ec2:DescribeRegions` without `hop scan`, `S3Buckets` and `S3Objects` without
 `hop s3`, `RelayBucket` without a relay bucket. In AWS GovCloud (US) or China, ARNs

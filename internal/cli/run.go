@@ -124,11 +124,14 @@ stays there: see hop s3 push.`, session.PushLimit/1000),
 			return cobra.ExactArgs(3)(cmd, args)
 		},
 		ValidArgsFunction: func(cmd *cobra.Command, args []string, toComplete string) ([]string, cobra.ShellCompDirective) {
-			switch len(args) {
-			case 0:
+			switch {
+			case len(args) == 0:
 				return nil, cobra.ShellCompDirectiveDefault
-			case 1:
+			case len(args) == 1:
 				return completeNth(f, 1)(cmd, args, toComplete)
+			case len(args) == 2 && !bucket.HasScheme(toComplete):
+				// The path on the instance: Tab lists the directory there.
+				return completeRemote(f, 1)(cmd, args, toComplete)
 			}
 			return nil, cobra.ShellCompDirectiveNoFileComp
 		},
@@ -280,6 +283,9 @@ a third more than the file. CloudTrail records the StartSession call, and when t
 account logs sessions, the log may keep a copy of the file, base64-encoded. Linux
 and macOS instances only.
 
+With the shell integration (hop init), Tab completes the path on the instance by
+listing its directory there, through a session of the same kind that writes nothing.
+
 With s3://bucket/key in place of the instance and the path, the object comes from S3
 instead: see hop s3 pull.`,
 		Example: `  hop pull tools /var/log/app.log                 to ./app.log
@@ -293,11 +299,15 @@ instead: see hop s3 pull.`,
 			return cobra.RangeArgs(2, 3)(cmd, args)
 		},
 		ValidArgsFunction: func(cmd *cobra.Command, args []string, toComplete string) ([]string, cobra.ShellCompDirective) {
-			switch len(args) {
-			case 0:
+			switch {
+			case len(args) == 0:
 				return completeNth(f, 0)(cmd, args, toComplete)
-			case 1:
-				return nil, cobra.ShellCompDirectiveNoFileComp
+			case bucket.HasScheme(args[0]):
+				// From a bucket, what follows the place is a local path.
+				return nil, cobra.ShellCompDirectiveDefault
+			case len(args) == 1:
+				// The path on the instance: Tab lists the directory there.
+				return completeRemote(f, 0)(cmd, args, toComplete)
 			}
 			return nil, cobra.ShellCompDirectiveDefault
 		},

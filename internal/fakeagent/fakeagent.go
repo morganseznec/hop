@@ -38,7 +38,9 @@ func Install(t testing.TB) (out string) {
 		t.Fatal(err)
 	}
 	bin, out := t.TempDir(), t.TempDir()
-	script := "#!/bin/sh\n" + env + "=1 exec '" + strings.ReplaceAll(self, "'", `'\''`) + "' \"$@\"\n"
+	// A test binary built with -race sleeps a second before it exits, to report late
+	// races: as a plugin it has none to report, and every session would last that long.
+	script := "#!/bin/sh\n" + env + "=1 GORACE=atexit_sleep_ms=0 exec '" + strings.ReplaceAll(self, "'", `'\''`) + "' \"$@\"\n"
 	if err := os.WriteFile(filepath.Join(bin, "session-manager-plugin"), []byte(script), 0o755); err != nil {
 		t.Fatal(err)
 	}

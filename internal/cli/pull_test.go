@@ -104,8 +104,14 @@ func TestPullCompletion(t *testing.T) {
 	if got, _ := pull(cmd, nil, ""); len(got) == 0 {
 		t.Errorf("pull, instance: %q", got)
 	}
-	if got, d := pull(cmd, []string{"tools"}, ""); got != nil || d != cobra.ShellCompDirectiveNoFileComp {
+	// The path on the instance starts with "/", which Tab types; what follows is
+	// listed on the instance (see TestRemoteCompletion).
+	if got, d := pull(cmd, []string{"tools"}, ""); len(got) != 1 || got[0] != "/" || d != cobra.ShellCompDirectiveNoFileComp|cobra.ShellCompDirectiveNoSpace {
 		t.Errorf("pull, remote path: %q %v", got, d)
+	}
+	// From a bucket, the second argument is a local path.
+	if got, d := pull(cmd, []string{"s3://acme-logs/app.log"}, ""); got != nil || d != cobra.ShellCompDirectiveDefault {
+		t.Errorf("pull from a bucket, local path: %q %v", got, d)
 	}
 	if got, d := pull(cmd, []string{"tools", "/var/log/app.log"}, ""); got != nil || d != cobra.ShellCompDirectiveDefault {
 		t.Errorf("pull, local path: %q %v", got, d)

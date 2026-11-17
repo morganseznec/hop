@@ -51,6 +51,15 @@ type Config struct {
 	// A value is a bucket, or a bucket and a key prefix ("acme-tools/hop-relay/"). hop
 	// never creates the bucket.
 	RelayBuckets map[string]string `yaml:"relay_buckets,omitempty"`
+	// Whether Tab completes a path on an instance by listing its directory there,
+	// through a session (hop pull, hop push). On, unless set to false.
+	RemoteCompletion *bool `yaml:"remote_completion,omitempty"`
+}
+
+// CompletesRemotePaths reports whether Tab may open a session on an instance to list
+// a directory there.
+func (c *Config) CompletesRemotePaths() bool {
+	return c.RemoteCompletion == nil || *c.RemoteCompletion
 }
 
 // Dir returns the folder of the configuration. Without a home directory (HOME unset)

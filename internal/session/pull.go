@@ -67,20 +67,42 @@ func Pull(ctx context.Context, cfg aws.Config, req Request, remote, local string
 	}
 	defer tmp.Discard()
 
+	h := sha256.New()
+	var n int64
+	var sum string
+	err = command(ctx, cfg, req, pullScript(remote, nonce), pluginExitWait, func(stdout io.Reader) (err error) {
+		n, sum, err = receive(stdout, "--hop"+nonce+"-", io.MultiWriter(tmp, h), progress)
+		return err
+	})
+	if err != nil {
+		return n, err
+	}
+	if got := hex.EncodeToString(h.Sum(nil)); got != sum {
+		return n, fmt.Errorf("checksum mismatch after download: local %s, remote %s", got, sum)
+	}
+	return n, tmp.Commit()
+}
+
+// command runs a shell script on the instance through a non-interactive session
+// (PullDocument) and gives read what the plugin prints: its own lines, then what the
+// script writes, stdout and stderr together. Once read returns, the plugin gets
+// exitWait to exit by itself, which it does when the agent closes the session; past
+// that it is stopped, and the session ended from here.
+func command(ctx context.Context, cfg aws.Config, req Request, script string, exitWait time.Duration, read func(stdout io.Reader) error) error {
 	req.Document = PullDocument
 	// The agent splits the command into words like a shell would, then runs it without
 	// a shell: the script needs one of its own.
-	req.Parameters = map[string][]string{"command": {"sh -c " + ShellQuote(pullScript(remote, nonce))}}
+	req.Parameters = map[string][]string{"command": {"sh -c " + ShellQuote(script)}}
 	s, err := open(ctx, cfg, req)
 	if err != nil {
-		return 0, err
+		return err
 	}
 	// The plugin ends the session as soon as its stdin closes, before the output arrives:
 	// stdin stays open until the plugin exits.
 	inR, inW, err := os.Pipe()
 	if err != nil {
 		s.terminate(ctx)
-		return 0, err
+		return err
 	}
 	defer inW.Close()
 	s.cmd.Stdin = inR
@@ -88,7 +110,7 @@ func Pull(ctx context.Context, cfg aws.Config, req Request, remote, local string
 	if err != nil {
 		inR.Close()
 		s.terminate(ctx)
-		return 0, err
+		return err
 	}
 	var stderr tail
 	s.cmd.Stderr = &stderr
@@ -96,7 +118,7 @@ func Pull(ctx context.Context, cfg aws.Config, req Request, remote, local string
 	inR.Close()
 	if err != nil {
 		s.terminate(ctx)
-		return 0, err
+		return err
 	}
 
 	// Ctrl-C cancels ctx: the plugin, which ignores it, is stopped here.
@@ -108,12 +130,11 @@ func Pull(ctx context.Context, cfg aws.Config, req Request, remote, local string
 		case <-stopped:
 		}
 	}()
-	h := sha256.New()
-	n, sum, recvErr := receive(stdout, "--hop"+nonce+"-", io.MultiWriter(tmp, h), progress)
-	if recvErr != nil {
+	readErr := read(stdout)
+	if readErr != nil {
 		_ = s.cmd.Process.Kill()
 	}
-	// The plugin's exit code says nothing more than receive: it exits 0 when the agent
+	// The plugin's exit code says nothing more than read: it exits 0 when the agent
 	// closes the session, and is killed otherwise.
 	exited := make(chan struct{})
 	go func() {
@@ -122,8 +143,8 @@ func Pull(ctx context.Context, cfg aws.Config, req Request, remote, local string
 	}()
 	select {
 	case <-exited:
-	case <-time.After(pluginExitWait):
-		// The file is complete; the session may not be closed yet.
+	case <-time.After(exitWait):
+		// Everything was read; the session may not be closed yet.
 		_ = s.cmd.Process.Kill()
 		<-exited
 		s.terminate(ctx)
@@ -133,18 +154,15 @@ func Pull(ctx context.Context, cfg aws.Config, req Request, remote, local string
 	switch {
 	case ctx.Err() != nil:
 		s.terminate(ctx)
-		return n, ctx.Err()
-	case recvErr != nil:
+		return ctx.Err()
+	case readErr != nil:
 		s.terminate(ctx)
 		if msg := stderr.String(); msg != "" {
-			return n, fmt.Errorf("%w (session-manager-plugin: %s)", recvErr, msg)
+			return fmt.Errorf("%w (session-manager-plugin: %s)", readErr, msg)
 		}
-		return n, recvErr
+		return readErr
 	}
-	if got := hex.EncodeToString(h.Sum(nil)); got != sum {
-		return n, fmt.Errorf("checksum mismatch after download: local %s, remote %s", got, sum)
-	}
-	return n, tmp.Commit()
+	return nil
 }
 
 // pullScript returns the shell script that sends path, between lines that start with

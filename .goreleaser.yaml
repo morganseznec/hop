@@ -65,6 +65,14 @@ homebrew_casks:
     license: MIT
     dependencies:
       - cask: session-manager-plugin
+    # Once the cask is installed, Homebrew runs "hop completion <shell>" and puts the
+    # result where zsh, bash and fish look for completions: Tab works without a line
+    # in ~/.zshrc. "hop init" still adds what a completion file cannot (noglob in zsh,
+    # an alias). GoReleaser writes this after the hook below, which the binary needs
+    # first to be allowed to run.
+    generate_completions_from_executable:
+      shell_parameter_format: cobra
+      shells: [bash, zsh, fish]
     hooks:
       post:
         # The binary is not notarized: clear the quarantine flag Homebrew downloads get.

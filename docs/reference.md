@@ -187,6 +187,7 @@ typed is compared to the names of objects and prefixes, not to the rest of their
 | `hop s3 pull` with a pattern | The objects of one prefix that fit the pattern, into a directory (the current one by default), one after the other; hop stops at the first that fails and says how many arrived. A pattern that names several levels is refused. |
 | `hop s3 pull` | No size limit. Ranges of 8 MB, five at a time, each tried up to three times when the connection drops, all from the same version of the object. The file is written under a temporary name next to its destination, then renamed once the size matches and, when S3 holds a checksum of the whole object (SHA-256, CRC-64/NVME, CRC-32C or CRC-32), once that matches too. An archived object must be restored first. |
 | `hop s3 push` | One request up to 16 MB, a multipart upload from there: parts of 8 MB, five at a time, larger parts past 80 GB (S3 takes 10,000 parts). A failed or interrupted upload is aborted, Ctrl-C included (the abort gets 10 seconds). An existing object is replaced only after a yes, or with `--force`. The content type is set from the file extension. Several files go one after the other, to a destination that ends with `/`: a no to replacing one skips it, any other failure stops, and hop says how many were sent. |
+| Tab on a path of an instance | `hop pull` and `hop push`, for an instance hop would act on without a question. One session per directory, which runs one command and writes nothing: the directory is read as the session user, or with `sudo -n`. 8 seconds at most, the first 2,000 names that start with what is typed, in the order the shell of the instance sorts them. Names with a control character, or that are not UTF-8, are left out. A listing answers the next Tab for 30 seconds; a failure is not kept. `remote_completion: false` turns it off. |
 | Inventory cache | 15 minutes (`cache_ttl`). A profile and region whose query failed is retried after one minute. |
 | Freshness before acting | An instance whose data is more than one minute old is looked up again before hop acts on it. |
 | Inventory queries | 16 profile/region pairs at a time, 25 seconds each at most. |
@@ -208,6 +209,7 @@ typed is compared to the names of objects and prefixes, not to the rest of their
 | `AWS_SHARED_CREDENTIALS_FILE` | AWS credentials file to read instead of `~/.aws/credentials`. |
 | `AWS_REGION`, then `AWS_DEFAULT_REGION` | Region of the profiles that set none, after `default_region` in hop's configuration and the region of `[default]`. |
 | `AWS_PROFILE` | Ignored: hop queries every profile with credentials. Use `-p` to narrow the scope. |
+| `HOP_ACTIVE_HELP` | `0` hides the hints zsh and bash show under the command line when Tab has nothing to offer (an instance that is not named for sure, an expired sign-in, a directory that does not exist). |
 
 The AWS SDK reads its own variables too (for example `HTTPS_PROXY`,
 `AWS_ENDPOINT_URL_SSM` or `AWS_ENDPOINT_URL_S3`), and hop hands the SSM endpoint it
@@ -261,6 +263,7 @@ bucket with its profile and region, and says how many names `-a` would add.
 | Previous configuration, after `hop scan --write` | `~/.config/hop/config.yaml.bak` | `%AppData%\hop\config.yaml.bak` |
 | Inventory cache (instances and buckets, no credentials) | `~/.cache/hop/inventory.json` | `%LocalAppData%\hop\inventory.json` |
 | Lock files of the cache | `~/.cache/hop/refresh.lock`, `save.lock` | `%LocalAppData%\hop\` |
+| Directories of instances that Tab listed in the last 30 seconds (up to 8) | `~/.cache/hop/paths.json` | `%LocalAppData%\hop\paths.json` |
 | Recent instances | `~/.local/state/hop/recents.json` | `%LocalAppData%\hop\recents.json` |
 | AWS profiles (read only) | `~/.aws/config`, `~/.aws/credentials` | `%UserProfile%\.aws\config`, `credentials` |
 | SSO tokens (read only, written by `aws sso login`) | `~/.aws/sso/cache/` | `%UserProfile%\.aws\sso\cache\` |
