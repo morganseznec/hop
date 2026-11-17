@@ -6,6 +6,29 @@ All notable changes to hop are listed here. The format follows
 
 ## [Unreleased]
 
+## [0.9.0] - 2026-11-17
+
+Tab completes the path on the instance for `hop pull` and `hop push`, and Homebrew
+installs the completion with hop.
+
+### Added
+
+- Tab completes the path on the instance for `hop pull` and `hop push`, as scp does
+  over SSH: `hop pull tools /var/log/<Tab>` lists that directory there, through a
+  session that runs one command and writes nothing. It reads the directory as the
+  session user, or with `sudo -n`, and only for an instance hop would act on without a
+  question. A listing answers the next Tab for 30 seconds. When Tab has nothing to
+  offer, zsh and bash say why under the command line. `remote_completion: false` in
+  the configuration turns it off.
+- The Homebrew cask installs the completion for zsh, bash and fish: `hop p<Tab>`
+  offers `pull` and `push` without a line in `~/.zshrc`. `hop init` still adds what a
+  completion file cannot: `noglob` in zsh, and an alias.
+
+### Fixed
+
+- `hop pull s3://bucket/key <Tab>` completes a local path, which is what follows a
+  place in a bucket.
+
 ## [0.8.0] - 2026-11-17
 
 The picker searches by words, on names, and its arrows go around the list.
@@ -391,7 +414,8 @@ First release.
   and Arch Linux packages, and a hardened Alpine image on GHCR. The Homebrew cask
   came with v0.1.1.
 
-[Unreleased]: https://github.com/morganseznec/hop/compare/v0.8.0...HEAD
+[Unreleased]: https://github.com/morganseznec/hop/compare/v0.9.0...HEAD
+[0.9.0]: https://github.com/morganseznec/hop/compare/v0.8.0...v0.9.0
 [0.8.0]: https://github.com/morganseznec/hop/compare/v0.7.0...v0.8.0
 [0.7.0]: https://github.com/morganseznec/hop/compare/v0.6.0...v0.7.0
 [0.6.0]: https://github.com/morganseznec/hop/compare/v0.5.0...v0.6.0
