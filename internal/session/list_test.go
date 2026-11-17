@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"slices"
 	"strings"
 	"testing"
@@ -141,6 +142,11 @@ func TestListStopsAtTheLimit(t *testing.T) {
 }
 
 func TestListFails(t *testing.T) {
+	// Before the files below are created: Windows refuses some of their names, and
+	// the fake plugin is a shell script, which it does not run.
+	if runtime.GOOS == "windows" {
+		t.Skip("the fake plugin is a shell script")
+	}
 	dir := remoteDir(t)
 	closed := filepath.Join(t.TempDir(), "closed")
 	os.Mkdir(closed, 0o700)
