@@ -51,15 +51,20 @@ func isolate(t *testing.T) string {
 		"AWS_CONFIG_FILE":             filepath.Join(home, "aws", "config"),
 		"AWS_SHARED_CREDENTIALS_FILE": filepath.Join(home, "aws", "credentials"),
 		"AWS_ENDPOINT_URL":            "http://127.0.0.1:1",
-		"AWS_EC2_METADATA_DISABLED":   "true",
-		"AWS_PROFILE":                 "",
-		"AWS_REGION":                  "",
-		"AWS_DEFAULT_REGION":          "",
-		"AWS_ACCESS_KEY_ID":           "",
-		"AWS_SECRET_ACCESS_KEY":       "",
-		"AWS_SESSION_TOKEN":           "",
-		"AWS_USE_FIPS_ENDPOINT":       "",
-		"AWS_USE_DUALSTACK_ENDPOINT":  "",
+		// The SDK signs in to a portal with clients of its own, which do not follow the
+		// endpoint above: without these, a test that holds a token would call AWS.
+		"AWS_ENDPOINT_URL_SSO":       "http://127.0.0.1:1",
+		"AWS_ENDPOINT_URL_SSO_OIDC":  "http://127.0.0.1:1",
+		"AWS_ENDPOINT_URL_STS":       "http://127.0.0.1:1",
+		"AWS_EC2_METADATA_DISABLED":  "true",
+		"AWS_PROFILE":                "",
+		"AWS_REGION":                 "",
+		"AWS_DEFAULT_REGION":         "",
+		"AWS_ACCESS_KEY_ID":          "",
+		"AWS_SECRET_ACCESS_KEY":      "",
+		"AWS_SESSION_TOKEN":          "",
+		"AWS_USE_FIPS_ENDPOINT":      "",
+		"AWS_USE_DUALSTACK_ENDPOINT": "",
 	} {
 		t.Setenv(k, v)
 	}

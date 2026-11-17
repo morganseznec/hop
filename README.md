@@ -324,6 +324,12 @@ codes, the limits, the environment variables and where hop keeps its files.
   two accounts, an Auto Scaling group), a confirmation for a single partial match or a
   typo. For `run` and `push`, the confirmation defaults to no.
 - Without a terminal, hop never guesses: it lists the candidates and stops.
+- hop does not ask you to choose among instances it could not check. When the sign-in
+  of their SSO portal has expired, what the cache holds of those accounts dates from
+  the last time it had not: an instance renamed or terminated since would still be
+  offered, under the name it had. hop offers to sign in first, queries the accounts
+  behind that portal again, then searches once more. A no keeps the choice as the
+  cache has it; without a terminal, hop says which accounts it could not check.
 - When a search finds nothing, only a partial match or only stopped instances, hop
   first queries again the accounts whose data is more than a minute old, so an
   instance launched minutes ago is found. A word search that opens the picker shows

@@ -27,7 +27,9 @@ import (
 
 // fakeAWS plays EC2 and SSM for the static-key profile acme-billing. It listens on the
 // loopback interface only. The SSO profiles of the fleet have no token in the
-// temporary home, so they fail before any call.
+// temporary home, so they fail before any call. Once a test gives one a token (see
+// signingAWSCLI), the fake is also the SSO portal: it hands out role credentials that
+// name the account, and EC2 then answers for that account.
 type fakeAWS struct {
 	mu       sync.Mutex
 	commands []string
@@ -45,6 +47,9 @@ type fakeAWS struct {
 	// pushStdout, when set, is what a push script prints: it then succeeds, instead of
 	// failing on a permission.
 	pushStdout string
+	// prodName replaces the name of i-0p01, the instance of the account of acme-prod
+	// (111111111111) in eu-west-1, which only role credentials of that account see.
+	prodName string
 }
 
 // inventoryCalls returns the calls made to list or look up instances, sorted: what
@@ -68,13 +73,29 @@ func (f *fakeAWS) record(call string) {
 	f.calls = append(f.calls, call)
 }
 
-var credentialRegion = regexp.MustCompile(`Credential=[^/]+/\d{8}/([^/]+)/`)
+var credentialRegion = regexp.MustCompile(`Credential=([^/]+)/\d{8}/([^/]+)/`)
+
+// roleKey starts the access keys the fake SSO portal hands out: the account follows.
+const roleKey = "ASIAFAKE"
 
 func (f *fakeAWS) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	body, _ := io.ReadAll(r.Body)
-	region := ""
+	// The SSO portal: role credentials for whoever holds a token.
+	if r.URL.Path == "/federation/credentials" {
+		account := r.URL.Query().Get("account_id")
+		f.record("GetRoleCredentials " + account)
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprintf(w, `{"roleCredentials":{"accessKeyId":"%s%s","secretAccessKey":"fictional-secret","sessionToken":"fictional-token","expiration":%d}}`,
+			roleKey, account, time.Now().Add(time.Hour).UnixMilli())
+		return
+	}
+	region, account := "", ""
 	if m := credentialRegion.FindStringSubmatch(r.Header.Get("Authorization")); m != nil {
-		region = m[1]
+		region = m[2]
+		account, _ = strings.CutPrefix(m[1], roleKey)
+		if account == m[1] {
+			account = ""
+		}
 	}
 	if target := r.Header.Get("X-Amz-Target"); target != "" {
 		w.Header().Set("Content-Type", "application/x-amz-json-1.1")
@@ -141,8 +162,11 @@ func (f *fakeAWS) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	f.record(call)
 	f.mu.Lock()
-	appState, appName, lookupDenied := f.appState, f.appName, f.lookupDenied
+	appState, appName, lookupDenied, prodName := f.appState, f.appName, f.lookupDenied, f.prodName
 	f.mu.Unlock()
+	if prodName == "" {
+		prodName = "acme-p-tools"
+	}
 	if appState == "" {
 		appState = "running"
 	}
@@ -163,14 +187,19 @@ func (f *fakeAWS) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			`</regionInfo></DescribeRegionsResponse>`)
 	case "DescribeInstances":
 		items := ""
-		switch region {
-		case "eu-west-1":
+		switch {
+		case account == "111111111111" && region == "eu-west-1":
+			items = `<item><instanceId>i-0p01</instanceId><instanceState><code>16</code><name>running</name></instanceState>` +
+				`<privateIpAddress>10.0.0.1</privateIpAddress><tagSet><item><key>Name</key><value>` + prodName + `</value></item></tagSet></item>`
+		case account != "":
+			// The other accounts behind the portal hold nothing.
+		case region == "eu-west-1":
 			items = `<item><instanceId>i-0b01</instanceId><instanceState><code>16</code><name>` + appState + `</name></instanceState>` +
 				`<privateIpAddress>10.1.0.1</privateIpAddress><tagSet><item><key>Name</key><value>` + appName + `</value></item></tagSet></item>`
-		case "us-east-1":
+		case region == "us-east-1":
 			items = `<item><instanceId>i-0b02</instanceId><instanceState><code>80</code><name>stopped</name></instanceState>` +
 				`<tagSet><item><key>Name</key><value>acme-b-legacy</value></item></tagSet></item>`
-		case "ap-south-1":
+		case region == "ap-south-1":
 			// A region the caller may not read (an SCP, for instance).
 			w.WriteHeader(http.StatusForbidden)
 			io.WriteString(w, `<Response><Errors><Error><Code>UnauthorizedOperation</Code><Message>denied</Message></Error></Errors></Response>`)
@@ -194,6 +223,8 @@ func fakeAWSEnv(t *testing.T) *fakeAWS {
 	srv := httptest.NewServer(f)
 	t.Cleanup(srv.Close)
 	t.Setenv("AWS_ENDPOINT_URL", srv.URL)
+	// The portal a signed-in SSO profile gets its role credentials from.
+	t.Setenv("AWS_ENDPOINT_URL_SSO", srv.URL)
 	ageCache(t, 5*time.Minute)
 	return f
 }
