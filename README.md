@@ -77,7 +77,7 @@ A partial or fuzzy match asks before connecting. The instances must meet the
   instances hiding in other regions. Hybrid nodes (`mi-...`) are listed too.
 - **Search by what you remember.** A name, part of a name, several words
   (`hop shop prod app`), an instance ID or a private IP. An unambiguous match connects
-  directly; anything else opens a fuzzy picker with a preview, or asks.
+  directly; anything else opens a picker with a preview, or asks.
 - **Safe with typos.** A fuzzy match never connects on its own: hop asks first, and
   only suggests when there is no terminal.
 - **Knows whether you are being recorded.** Before a shell, hop reads the account's
@@ -322,6 +322,23 @@ there is one, otherwise from words in the instance or profile name (`acme-p-tool
 all mean `test`. `-e` accepts any of these words, so `-e staging` lists every non-production
 instance, and refuses any other.
 
+### In the picker
+
+The picker lists instances, buckets or what a bucket holds, the first line nearest to
+the prompt. Type to narrow the list:
+
+- Every word typed must be in the line, whole, in any order: `prod shop` finds
+  `acme-p-shop-app` of `acme-prod`. The lines that hold the words in the order typed
+  come first, and the cursor goes to the first of them each time you type.
+- Separators do not matter: `2026 11 05`, `2026-11-05` and `20261105` all find
+  `app_2026-11-05.log.gz`. Letters are never skipped: `shpapp` finds nothing.
+- An instance or a bucket is searched by all its line says: name, profile, label,
+  region, environment. In a bucket, only names are searched: `11` does not find every
+  object of 11 KB, or written in November.
+- ↑ and ↓ move the cursor (Ctrl-P and Ctrl-N too) and go around: ↑ at the top of the
+  list leads to the bottom, ↓ at the bottom to the top. PgUp and PgDn move by a
+  screen. Enter chooses, Esc quits.
+
 ### Before opening a shell
 
 1. **Credentials.** With an expired SSO token, hop offers to open the portal (with the
@@ -461,7 +478,8 @@ hop: 1.2 MB received, CRC64NVME matches on both sides
 ```
 
 - **Picker.** `hop s3` on its own, in a terminal, opens a picker over the buckets,
-  like `hop` does over instances: type to filter, Enter to open one. Inside, the same
+  like `hop` does over instances: type words to filter
+  ([how](#in-the-picker)), Enter to open one. Inside, the same
   picker shows what the bucket holds, one level at a time: Enter on a prefix goes
   down, `..` goes back up (and from the top, back to the buckets), Enter on an object
   downloads it to the current directory, after a question. Esc quits. `-p`, `-r` and

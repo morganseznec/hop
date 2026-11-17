@@ -5,16 +5,17 @@ import (
 	"fmt"
 	"strings"
 
-	fuzzyfinder "github.com/ktr0731/go-fuzzyfinder"
 	"github.com/mattn/go-runewidth"
 
 	"github.com/morganseznec/hop/internal/inventory"
+	"github.com/morganseznec/hop/internal/picker"
 )
 
 var errAborted = errors.New("canceled")
 
-// pick opens the fuzzy picker. Each line holds name, profile, client label, region and
-// environment: typing "shop prod app" filters on all of them at once.
+// pick opens the picker over instances. Each line holds name, profile, client label,
+// region and environment: typing "shop prod app" keeps the lines that hold the three
+// words, in any order. A side panel says more of the instance under the cursor.
 func (a *app) pick(items []inventory.Instance, header string) (inventory.Instance, error) {
 	if !stdinTTY || !stderrTTY {
 		return inventory.Instance{}, severalMatch(items)
@@ -40,21 +41,15 @@ func (a *app) pick(items []inventory.Instance, header string) (inventory.Instanc
 		}
 		return s
 	}
-	opts := []fuzzyfinder.Option{
-		fuzzyfinder.WithPromptString("hop> "),
-		fuzzyfinder.WithPreviewWindow(func(i, w, h int) string {
-			if i < 0 {
-				return ""
-			}
-			return a.preview(items[i])
-		}),
-	}
 	if header == "" {
 		header = fmt.Sprintf("%d instances · ● agent online · Enter to connect, Esc to cancel", len(items))
 	}
-	opts = append(opts, fuzzyfinder.WithHeader(header))
-	i, err := fuzzyfinder.Find(items, line, opts...)
-	if errors.Is(err, fuzzyfinder.ErrAbort) {
+	i, err := pickInstance(len(items), line, picker.Options{
+		Prompt:  "hop> ",
+		Header:  header,
+		Preview: func(i int) string { return a.preview(items[i]) },
+	})
+	if errors.Is(err, picker.ErrAborted) {
 		return inventory.Instance{}, errAborted
 	}
 	if err != nil {
@@ -62,6 +57,9 @@ func (a *app) pick(items []inventory.Instance, header string) (inventory.Instanc
 	}
 	return items[i], nil
 }
+
+// pickInstance is the picker pick opens. Tests replace it.
+var pickInstance = picker.Pick
 
 func (a *app) profileLabel(profile string) string {
 	if l := a.cfg.Label(profile); l != "" {
