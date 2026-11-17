@@ -5,6 +5,10 @@ project_name: hop
 before:
   hooks:
     - go mod verify
+    # The completions that the Homebrew cask installs, written here as files: nothing
+    # runs hop on the machine it is installed on, where macOS would block a binary
+    # that is still in quarantine.
+    - sh -c 'rm -rf completions && mkdir completions && go run ./cmd/hop completion bash > completions/hop.bash && go run ./cmd/hop completion zsh > completions/_hop && go run ./cmd/hop completion fish > completions/hop.fish'
 
 builds:
   - id: hop
@@ -30,6 +34,7 @@ archives:
     files:
       - LICENSE
       - README.md
+      - completions/*
 
 nfpms:
   - id: packages
@@ -65,14 +70,16 @@ homebrew_casks:
     license: MIT
     dependencies:
       - cask: session-manager-plugin
-    # Once the cask is installed, Homebrew runs "hop completion <shell>" and puts the
-    # result where zsh, bash and fish look for completions: Tab works without a line
+    # The completions come as files of the archive (see the hooks above), which
+    # Homebrew links where zsh, bash and fish look for them: Tab works without a line
     # in ~/.zshrc. "hop init" still adds what a completion file cannot (noglob in zsh,
-    # an alias). GoReleaser writes this after the hook below, which the binary needs
-    # first to be allowed to run.
-    generate_completions_from_executable:
-      shell_parameter_format: cobra
-      shells: [bash, zsh, fish]
+    # an alias). Not generate_completions_from_executable: Homebrew runs it before the
+    # hook below, on a binary still in quarantine, and macOS blocks it with a malware
+    # warning (hop 0.9.0).
+    completions:
+      bash: completions/hop.bash
+      zsh: completions/_hop
+      fish: completions/hop.fish
     hooks:
       post:
         # The binary is not notarized: clear the quarantine flag Homebrew downloads get.

@@ -1,3 +1,5 @@
 /bin/
 /dist/
+# Written by the release (see .goreleaser.yaml).
+/completions/
 coverage.out

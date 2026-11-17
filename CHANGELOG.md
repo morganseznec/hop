@@ -6,6 +6,24 @@ All notable changes to hop are listed here. The format follows
 
 ## [Unreleased]
 
+## [0.9.1] - 2026-11-17
+
+Installing with Homebrew no longer stops on a macOS warning.
+
+### Fixed
+
+- Installing or upgrading hop 0.9.0 with Homebrew showed a macOS warning ("Apple
+  could not verify hop is free of malware"), and installed no completion. The cask had
+  Homebrew run hop to write its completions, which Homebrew does before the step that
+  clears the quarantine flag: macOS blocked the binary. The completions now come as
+  files of the archive, which Homebrew links without running anything. hop itself was
+  not affected, and the cask of 0.9.0 was corrected the same day.
+
+### Changed
+
+- The archives hold a `completions` folder, with the completion files for bash, zsh
+  and fish.
+
 ## [0.9.0] - 2026-11-17
 
 Tab completes the path on the instance for `hop pull` and `hop push`, and Homebrew
@@ -414,7 +432,8 @@ First release.
   and Arch Linux packages, and a hardened Alpine image on GHCR. The Homebrew cask
   came with v0.1.1.
 
-[Unreleased]: https://github.com/morganseznec/hop/compare/v0.9.0...HEAD
+[Unreleased]: https://github.com/morganseznec/hop/compare/v0.9.1...HEAD
+[0.9.1]: https://github.com/morganseznec/hop/compare/v0.9.0...v0.9.1
 [0.9.0]: https://github.com/morganseznec/hop/compare/v0.8.0...v0.9.0
 [0.8.0]: https://github.com/morganseznec/hop/compare/v0.7.0...v0.8.0
 [0.7.0]: https://github.com/morganseznec/hop/compare/v0.6.0...v0.7.0
