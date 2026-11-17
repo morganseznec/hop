@@ -6,6 +6,25 @@ All notable changes to hop are listed here. The format follows
 
 ## [Unreleased]
 
+## [0.8.0] - 2026-11-17
+
+The picker searches by words, on names, and its arrows go around the list.
+
+### Changed
+
+- The picker of `hop` and `hop s3` searches by words: every word typed must be in the
+  line, whole, in any order, and separators do not matter. `2026 11 05`, `2026-11-05`
+  and `20261105` all find `c2b_2026-11-05.csv.gz`. The lines that hold the words in
+  the order typed come first. Letters scattered across a name (`shpapp`) no longer
+  find it: in a list of names that look alike, they kept far too many lines.
+- In a bucket, the picker compares what is typed to the names of objects and prefixes
+  only. A number typed no longer finds objects by their size or by their date.
+- The cursor goes to the first line found each time what is typed changes. In
+  `hop s3` it stayed at the top of the list, away from the best match.
+- ↑ at the top of the list leads to the bottom, and ↓ at the bottom to the top.
+- The picker is hop's own, drawn with tcell: go-fuzzyfinder and three dependencies it
+  brought are gone. It looks the same, and keeps the same keys.
+
 ## [0.7.0] - 2026-11-13
 
 Finds a bucket among a hundred, and a file in a bucket: `hop s3` and `hop s3 ls` take
@@ -372,7 +391,8 @@ First release.
   and Arch Linux packages, and a hardened Alpine image on GHCR. The Homebrew cask
   came with v0.1.1.
 
-[Unreleased]: https://github.com/morganseznec/hop/compare/v0.7.0...HEAD
+[Unreleased]: https://github.com/morganseznec/hop/compare/v0.8.0...HEAD
+[0.8.0]: https://github.com/morganseznec/hop/compare/v0.7.0...v0.8.0
 [0.7.0]: https://github.com/morganseznec/hop/compare/v0.6.0...v0.7.0
 [0.6.0]: https://github.com/morganseznec/hop/compare/v0.5.0...v0.6.0
 [0.5.0]: https://github.com/morganseznec/hop/compare/v0.4.0...v0.5.0
