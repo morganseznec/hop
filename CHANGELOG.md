@@ -6,6 +6,19 @@ All notable changes to hop are listed here. The format follows
 
 ## [Unreleased]
 
+## [0.10.0] - 2026-11-23
+
+`hop pull` downloads several files in one command.
+
+### Added
+
+- `hop pull` downloads several files in one command: several paths, as the shell
+  writes `/var/log/app.{17,18,19}.log`, or a pattern in the file name, which the
+  instance expands: `hop pull tools '/var/log/app-2026-11-1*' logs/`. hop refused
+  more than one path ("accepts between 2 and 3 arg(s)"), and looked for a file named
+  with the `*` itself. The files land in the current directory, or in the directory
+  given last; each has its own session, and one that fails does not stop the others.
+
 ## [0.9.2] - 2026-11-17
 
 hop signs in before it asks to choose among instances it could not check.
@@ -447,7 +460,8 @@ First release.
   and Arch Linux packages, and a hardened Alpine image on GHCR. The Homebrew cask
   came with v0.1.1.
 
-[Unreleased]: https://github.com/morganseznec/hop/compare/v0.9.2...HEAD
+[Unreleased]: https://github.com/morganseznec/hop/compare/v0.10.0...HEAD
+[0.10.0]: https://github.com/morganseznec/hop/compare/v0.9.2...v0.10.0
 [0.9.2]: https://github.com/morganseznec/hop/compare/v0.9.1...v0.9.2
 [0.9.1]: https://github.com/morganseznec/hop/compare/v0.9.0...v0.9.1
 [0.9.0]: https://github.com/morganseznec/hop/compare/v0.8.0...v0.9.0
