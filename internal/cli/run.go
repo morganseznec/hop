@@ -260,23 +260,31 @@ func (a *app) pushVia(ctx context.Context, cfg aws.Config, in inventory.Instance
 	return nil
 }
 
-const pullShort = "Download a file and verify its SHA-256 (replaces scp from the instance)"
+const pullShort = "Download files and verify their SHA-256 (replaces scp from the instance)"
 
 func newPull(f *filters) *cobra.Command {
 	return &cobra.Command{
-		Use:   "pull <instance> <remote-path> [local-path]",
+		Use:   "pull <instance> <remote-path>... [local-path]",
 		Short: pullShort,
 		Long: pullShort + `.
 
-The file goes through a Session Manager session that runs a single command
+Each file goes through a Session Manager session that runs a single command
 (AWS-StartNonInteractiveCommand): no SSH key, and no size limit. It is read as the
 session user (ssm-user by default), or with sudo -n when that user cannot read it.
 Without a local path, it lands in the current directory under its own name; given a
 directory, it lands there under its own name.
 
-hop writes it under a temporary name, then renames it once the SHA-256 matches on
-both sides: an interrupted download leaves nothing behind. A new file is readable by
-you only; an existing one is replaced and keeps its mode.
+Several files come in one command: several paths, as the shell writes
+/var/log/app.{1,2,3}.log, or a pattern in the file name (*, ?, [...]), which the
+instance expands: '/var/log/app-2026-11-1*.log'. Quote a pattern, or zsh looks for
+it on this machine and stops on "no matches found"; the shell integration (hop init
+zsh) does that for you. With several files, the local path is a directory: the last
+path is read as one when it is a directory here, and as a path on the instance
+otherwise. A file that fails does not stop the others.
+
+hop writes each file under a temporary name, then renames it once the SHA-256
+matches on both sides: an interrupted download leaves nothing behind. A new file is
+readable by you only; an existing one is replaced and keeps its mode.
 
 While it streams, the SSM agent keeps the output on the instance's disk, in base64:
 a third more than the file. CloudTrail records the StartSession call, and when the
@@ -290,13 +298,15 @@ With s3://bucket/key in place of the instance and the path, the object comes fro
 instead: see hop s3 pull.`,
 		Example: `  hop pull tools /var/log/app.log                 to ./app.log
   hop pull tools /etc/nginx/nginx.conf conf/      to conf/nginx.conf
+  hop pull tools /var/log/app.{17,18,19}.log      three files, to .
+  hop pull tools '/var/log/app-2026-11-1*' logs/  every match, to logs/
   hop pull -p acme-prod db /var/backups/db.sql.gz /tmp/prod.sql.gz
   hop pull s3://acme-logs/2026/app.log            from a bucket (see hop s3 pull)`,
 		Args: func(cmd *cobra.Command, args []string) error {
 			if len(args) > 0 && bucket.HasScheme(args[0]) {
 				return cobra.RangeArgs(1, 2)(cmd, args)
 			}
-			return cobra.RangeArgs(2, 3)(cmd, args)
+			return cobra.MinimumNArgs(2)(cmd, args)
 		},
 		ValidArgsFunction: func(cmd *cobra.Command, args []string, toComplete string) ([]string, cobra.ShellCompDirective) {
 			switch {
@@ -315,16 +325,22 @@ instead: see hop s3 pull.`,
 			if bucket.HasScheme(args[0]) {
 				return runS3Pull(cmd, f, args)
 			}
-			remote, local := args[1], ""
-			if len(args) == 3 {
-				local = args[2]
-			}
+			remotes, local := splitPull(args[1:])
 			// Before the picker, a question or a sign-in, which would all be for nothing.
-			if err := session.CheckPull(remote); err != nil {
-				return err
+			for _, r := range remotes {
+				if err := checkRemotePattern(r); err != nil {
+					return err
+				}
 			}
-			local, err := pullTarget(remote, local)
-			if err != nil {
+			single := len(remotes) == 1 && !hasPattern(remotes[0])
+			target := ""
+			if single {
+				t, err := pullTarget(remotes[0], local)
+				if err != nil {
+					return err
+				}
+				target = t
+			} else if err := checkPullDir(local); err != nil {
 				return err
 			}
 			a, err := newApp(*f)
@@ -337,10 +353,24 @@ instead: see hop s3 pull.`,
 			}
 			a.warnAgent(in)
 			a.touch(in)
-			info("%s:%s -> %s", in.Name, remote, local)
 			req := session.Request{Profile: in.Profile, Region: in.Region, InstanceID: in.ID, PreferSSO: a.preferSSO(in.Profile)}
+			if !single {
+				list := func(ctx context.Context, dir, prefix string) ([]string, bool, error) {
+					return session.List(ctx, cfg, req, dir, prefix)
+				}
+				files, err := expandPulls(cmd.Context(), remotes, list)
+				if err != nil {
+					return err
+				}
+				targets, err := pullTargets(files, local)
+				if err != nil {
+					return err
+				}
+				return pullMany(cmd.Context(), cfg, req, in.Name, files, targets)
+			}
+			info("%s:%s -> %s", in.Name, remotes[0], target)
 			p := &progress{tty: stderrTTY}
-			n, err := session.Pull(cmd.Context(), cfg, req, remote, local, p.update)
+			n, err := session.Pull(cmd.Context(), cfg, req, remotes[0], target, p.update)
 			p.clear()
 			if err != nil {
 				return err

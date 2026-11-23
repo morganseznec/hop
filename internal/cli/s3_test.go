@@ -601,7 +601,7 @@ func TestS3PullChecksBeforeResolving(t *testing.T) {
 		t.Errorf("S3 was called: %v", srv.Calls())
 	}
 	// The instance form keeps its own arguments.
-	if _, _, err := runHop(t, "pull", "tools"); err == nil || !strings.Contains(err.Error(), "accepts between 2 and 3 arg(s)") {
+	if _, _, err := runHop(t, "pull", "tools"); err == nil || !strings.Contains(err.Error(), "requires at least 2 arg(s)") {
 		t.Errorf("hop pull tools: %v", err)
 	}
 	if _, _, err := runHop(t, "pull", "s3://a/b", "c", "d"); err == nil || !strings.Contains(err.Error(), "accepts between 1 and 2 arg(s)") {

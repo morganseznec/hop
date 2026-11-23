@@ -125,3 +125,126 @@ func TestByteSize(t *testing.T) {
 		}
 	}
 }
+
+func TestPullSeveral(t *testing.T) {
+	f := fakeAWSEnv(t)
+	cacheBillingApp(t, 5*time.Minute)
+	fakeagent.Install(t)
+	// The fake agent runs the session's commands here: the "remote" files are local.
+	remote := t.TempDir()
+	for name, data := range map[string]string{"app.17.log": "seventeen\n", "app.18.log": "eighteen\n", "app.19.log": "nineteen\n", "other.txt": "x\n", ".app.1.log": "hidden\n"} {
+		os.WriteFile(filepath.Join(remote, name), []byte(data), 0o644)
+	}
+	os.Mkdir(filepath.Join(remote, "app.dir.log"), 0o755)
+
+	// A pattern, expanded on the instance, into a directory.
+	dest := t.TempDir()
+	_, stderr, err := runHop(t, "pull", "acme-b-app", remote+"/app.*.log", dest)
+	if err != nil {
+		t.Fatalf("%v\n%s", err, stderr)
+	}
+	entries, _ := os.ReadDir(dest)
+	var got []string
+	for _, e := range entries {
+		got = append(got, e.Name())
+	}
+	if strings.Join(got, " ") != "app.17.log app.18.log app.19.log" {
+		t.Errorf("pattern: files %q\n%s", got, stderr)
+	}
+	if b, _ := os.ReadFile(filepath.Join(dest, "app.18.log")); string(b) != "eighteen\n" {
+		t.Errorf("app.18.log: %q", b)
+	}
+	if !strings.Contains(stderr, "hop: 3 of 3 files received, 28 B in all\n") {
+		t.Errorf("stderr:\n%s", stderr)
+	}
+	f.mu.Lock()
+	// One session lists the directory, then one per file.
+	if len(f.sessions) != 4 {
+		t.Errorf("%d sessions, want 4", len(f.sessions))
+	}
+	f.mu.Unlock()
+
+	// Several paths, as a brace gives them, into the current directory; one fails,
+	// the others still come.
+	cwd := t.TempDir()
+	t.Chdir(cwd)
+	_, stderr, err = runHop(t, "pull", "acme-b-app", remote+"/app.17.log", remote+"/missing.log", remote+"/app.19.log")
+	if err == nil || err.Error() != "1 of 3 files failed: "+remote+"/missing.log" {
+		t.Errorf("error %v\n%s", err, stderr)
+	}
+	for _, name := range []string{"app.17.log", "app.19.log"} {
+		if _, err := os.Stat(filepath.Join(cwd, name)); err != nil {
+			t.Errorf("%s: %v", name, err)
+		}
+	}
+
+	// A pattern that matches nothing.
+	_, _, err = runHop(t, "pull", "acme-b-app", remote+"/nothing*")
+	if err == nil || err.Error() != "no file on the instance matches "+remote+"/nothing*" {
+		t.Errorf("no match: %v", err)
+	}
+}
+
+func TestPullSeveralChecksBeforeResolving(t *testing.T) {
+	fake := fakeAWSEnv(t)
+	dir := t.TempDir()
+	file := filepath.Join(dir, "old.log")
+	os.WriteFile(file, []byte("x"), 0o600)
+	cases := []struct {
+		args []string
+		want string
+	}{
+		{[]string{"nowhere", "/var/*/app.log"}, "a pattern on the instance goes in the file name only, not in the directory: /var/*/app.log"},
+		{[]string{"nowhere", "/var/log/app[.log"}, "invalid pattern: /var/log/app[.log"},
+		{[]string{"nowhere", "/var/log/a.log", "var/log/b.log", "/var/log/c.log"}, "remote path must be absolute (start with /): var/log/b.log"},
+		{[]string{"nowhere", "/var/log/*.log", file}, "several files land in a directory, and " + file + " is not one"},
+		{[]string{"nowhere", "/var/log/*.log", filepath.Join(dir, "missing") + "/"}, "directory not found: " + filepath.Join(dir, "missing") + "/"},
+	}
+	for _, c := range cases {
+		_, _, err := runHop(t, append([]string{"pull"}, c.args...)...)
+		if err == nil || err.Error() != c.want {
+			t.Errorf("%v: error %v, want %q", c.args, err, c.want)
+		}
+	}
+	fake.mu.Lock()
+	defer fake.mu.Unlock()
+	if len(fake.calls) != 0 {
+		t.Errorf("AWS called before the checks: %q", fake.calls)
+	}
+}
+
+func TestSplitPull(t *testing.T) {
+	dir := t.TempDir()
+	cases := []struct {
+		paths   []string
+		remotes string
+		local   string
+	}{
+		{[]string{"/var/log/a.log"}, "/var/log/a.log", ""},
+		{[]string{"/var/log/a.log", "a.log"}, "/var/log/a.log", "a.log"},
+		{[]string{"/var/log/a.log", dir}, "/var/log/a.log", dir},
+		{[]string{"/var/log/a.log", "out/"}, "/var/log/a.log", "out/"},
+		// Another directory, or one that exists here: a local path, as before.
+		{[]string{"/var/log/a.log", "/hop-nowhere/b.log"}, "/var/log/a.log", "/hop-nowhere/b.log"},
+		{[]string{dir + "/a.log", dir + "/b.log"}, dir + "/a.log", dir + "/b.log"},
+		// The same directory, which does not exist here: a brace, two remote files.
+		{[]string{"/hop-nowhere/a.log", "/hop-nowhere/b.log"}, "/hop-nowhere/a.log /hop-nowhere/b.log", ""},
+		{[]string{"/var/log/a.log", "/var/log/*.gz"}, "/var/log/a.log /var/log/*.gz", ""},
+		{[]string{"/l/a.log", "/l/b.log", "/l/c.log"}, "/l/a.log /l/b.log /l/c.log", ""},
+		{[]string{"/l/a.log", "/l/b.log", dir}, "/l/a.log /l/b.log", dir},
+		{[]string{"/l/a.log", "/l/b.log", "."}, "/l/a.log /l/b.log", "."},
+	}
+	for _, c := range cases {
+		remotes, local := splitPull(c.paths)
+		if strings.Join(remotes, " ") != c.remotes || local != c.local {
+			t.Errorf("%q: %q %q, want %q %q", c.paths, remotes, local, c.remotes, c.local)
+		}
+	}
+}
+
+func TestPullTargetsSameName(t *testing.T) {
+	_, err := pullTargets([]string{"/a/app.log", "/b/app.log"}, "")
+	if err == nil || err.Error() != "/a/app.log and /b/app.log would both land in app.log: download them one at a time" {
+		t.Errorf("%v", err)
+	}
+}

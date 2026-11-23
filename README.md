@@ -292,7 +292,7 @@ does over SSH: `hop pull tools /var/log/<Tab>` lists that directory there.
 | Port forwarding | `hop tunnel tools 3000`, `hop tunnel tools 5432 15432 --host db.internal` |
 | ssh, scp, rsync | `hop init ssh >> ~/.ssh/config` once, then `ssh ec2-user@tools.hop` |
 | Upload a file | `hop push ./app.conf tools /etc/app.conf`, `hop push ./release.tar.gz web /opt/app/release.tar.gz` |
-| Download a file | `hop pull tools /var/log/app.log`, `hop pull tools /etc/app.conf conf/` |
+| Download files | `hop pull tools /var/log/app.log`, `hop pull tools /etc/app.conf conf/`, `hop pull tools '/var/log/app-2026-11-1*' logs/` |
 | Pick an S3 bucket and browse it | `hop s3`, `hop s3 billing logs`, `hop s3 logs/2026/` |
 | Find a bucket, or a file in a bucket | `hop s3 ls 'acme-p-*' logs`, `hop s3 ls -R logs/ error '*.gz'` |
 | S3 buckets and objects | `hop s3 ls`, `hop s3 ls -lh logs/2026/`, `hop s3 pull logs/2026/app.log`, `hop s3 push dump.sql backups/db/` |
@@ -399,7 +399,7 @@ through a session:
 most, where SSM cuts it) and waits 2 minutes by default (`--timeout`). A command the instance has
 not picked up when hop stops waiting is canceled.
 
-### Downloading a file
+### Downloading files
 
 `hop pull` goes through a Session Manager session that runs a single command
 (`AWS-StartNonInteractiveCommand`), so it needs no SSH key and has no size limit:
@@ -408,7 +408,17 @@ not picked up when hop stops waiting is canceled.
 hop pull tools /var/log/app.log                  # to ./app.log
 hop pull tools /etc/nginx/nginx.conf conf/       # to conf/nginx.conf
 hop pull db /var/backups/db.sql.gz /tmp/prod.sql.gz
+hop pull tools /var/log/app.{17,18,19}.log       # three files, to .
+hop pull tools '/var/log/app-2026-11-1*' logs/   # every match, to logs/
 ```
+
+- Several files come in one command: several paths (as the shell writes a brace), or
+  a pattern in the file name (`*`, `?`, `[...]`) that the instance expands. Quote a
+  pattern, or zsh looks for it on your machine and stops on `no matches found`; the
+  [shell integration](#shell-completion) for zsh does that for you. With several
+  files, the local path is a directory: the last path is read as one when it is a
+  directory on your machine, and as a path on the instance otherwise. Each file has
+  its own session, and one that fails does not stop the others.
 
 - The file is read as the session user (`ssm-user` by default), or with `sudo -n`
   when that user cannot read it. Linux and macOS instances only.
